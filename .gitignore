@@ -1,0 +1,5 @@
+﻿node_modules/
+*.png
+tiktok-results-*.json
+debug-*.html
+.env
