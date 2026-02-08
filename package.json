@@ -1,1 +1,16 @@
-﻿
+﻿{
+  "name": "ev2-tiktok-analyzer",
+  "version": "1.0.0",
+  "description": "EV2 TikTok Ad Analysis Bot",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "pg": "^8.13.0",
+    "playwright": "^1.49.0",
+    "dotenv": "^16.4.5"
+  }
+}
