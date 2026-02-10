@@ -1,0 +1,48 @@
+{
+  "name": "TikTok Daily Scraping",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "매일 오전 10시",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "command": "cmd /c \"cd /d C:\\EV-System\\EV2-Boosting\\ev2-tiktok-analyzer && node run-all-keywords.js\""
+      },
+      "id": "execute-command",
+      "name": "TikTok 스크래핑 실행",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "매일 오전 10시": {
+      "main": [
+        [
+          {
+            "node": "TikTok 스크래핑 실행",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Asia/Seoul"
+  }
+}
