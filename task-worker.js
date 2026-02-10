@@ -240,6 +240,11 @@ async function processPendingTasks() {
         const results = [];
 
         for (const kw of kwResult.rows) {
+          // 현재 처리 중인 키워드를 task에 업데이트 (대시보드 표시용)
+          await pool.query(
+            `UPDATE tiktok_tasks SET keyword = $1 WHERE id = $2`,
+            [kw.keyword, task.id]
+          );
           console.log(`\n   🔍 [${kw.keyword}] 스크래핑...`);
           try {
             const result = await executeSearch(kw.keyword, task.top_n || 10);

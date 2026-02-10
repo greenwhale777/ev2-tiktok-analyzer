@@ -51,6 +51,21 @@ router.get('/tasks/active', async (req, res) => {
 });
 
 // ============================================================
+// POST /api/tiktok/tasks/cancel - 활성 작업 중단
+// ============================================================
+router.post('/tasks/cancel', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE tiktok_tasks SET status = 'cancelled', completed_at = NOW() 
+       WHERE status IN ('pending', 'running') RETURNING id`
+    );
+    res.json({ success: true, cancelled: result.rowCount });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============================================================
 // POST /api/tiktok/tasks - 작업 요청 (대시보드에서 호출)
 // ============================================================
 router.post('/tasks', async (req, res) => {
