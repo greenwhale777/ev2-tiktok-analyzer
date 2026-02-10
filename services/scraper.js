@@ -4,7 +4,7 @@ const { chromium } = require('playwright');
  * TikTok 검색 결과 스크래퍼
  * 
  * 흐름:
- * 1. TikTok 검색 URL로 이동 (https://www.tiktok.com/search?q=키워드)
+ * 1. TikTok 검색 URL로 이동 (https://www.tiktok.com/search/video?q=키워드)
  * 2. 인기 탭 결과 로딩 대기
  * 3. 상위 N개 비디오 카드에서 기본 정보 수집
  * 4. 각 비디오 페이지 방문하여 상세 정보 수집
@@ -106,7 +106,7 @@ class TikTokScraper {
       // === Step 1: TikTok 검색 페이지 이동 ===
       if (progressCallback) progressCallback('searching', 10, '검색 페이지 로딩 중...');
       
-      const searchUrl = `https://www.tiktok.com/search?q=${encodeURIComponent(keyword)}`;
+      const searchUrl = `https://www.tiktok.com/search/video?q=${encodeURIComponent(keyword)}`;
       console.log(`🔍 Searching TikTok: ${keyword}`);
       console.log(`📎 URL: ${searchUrl}`);
 
