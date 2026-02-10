@@ -14,6 +14,7 @@
  */
 
 require('dotenv').config();
+const { notifySearchComplete, notifySearchFailed } = require('./services/telegram');
 const { Pool } = require('pg');
 const TikTokScraper = require('./services/scraper');
 
@@ -229,6 +230,7 @@ async function processPendingTasks() {
           [JSON.stringify(result), task.id]
         );
         console.log(`   ✅ 완료: ${result.count}개 수집 | ${result.analysis}`);
+	await notifySearchComplete(task.keyword || '전체', result.count, task.id);
 
       } else if (task.type === 'run_all') {
         // 전체 키워드 실행
@@ -266,6 +268,7 @@ async function processPendingTasks() {
         [err.message, task.id]
       );
       console.log(`   ❌ 작업 실패: ${err.message}`);
+	await notifySearchFailed(task.keyword || '전체', err.message);
     }
 
     return true;

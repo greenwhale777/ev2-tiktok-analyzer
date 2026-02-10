@@ -33,6 +33,24 @@ initDatabase();
 })();
 
 // ============================================================
+// GET /api/tiktok/tasks/active - 활성 작업 상태 조회 (대시보드 폴링용)
+// ============================================================
+router.get('/tasks/active', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, type, keyword, status, created_at, started_at
+       FROM tiktok_tasks 
+       WHERE status IN ('pending', 'running')
+       OR (status IN ('completed', 'failed') AND completed_at > NOW() - INTERVAL '2 minutes')
+       ORDER BY id DESC`
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ============================================================
 // POST /api/tiktok/tasks - 작업 요청 (대시보드에서 호출)
 // ============================================================
 router.post('/tasks', async (req, res) => {

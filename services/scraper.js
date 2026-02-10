@@ -5,7 +5,7 @@ const { chromium } = require('playwright');
  * 
  * 흐름:
  * 1. TikTok 검색 URL로 이동 (https://www.tiktok.com/search/video?q=키워드)
- * 2. 인기 탭 결과 로딩 대기
+ * 2. 동영상 탭 결과 로딩 대기
  * 3. 상위 N개 비디오 카드에서 기본 정보 수집
  * 4. 각 비디오 페이지 방문하여 상세 정보 수집
  */
@@ -17,20 +17,26 @@ class TikTokScraper {
   }
 
   /**
-   * 브라우저 초기화 (봇 감지 우회 설정 포함)
+   * 브라우저 초기화 (Chrome 프로필 복사본 사용으로 캡차 우회)
    */
   async initBrowser() {
-    this.browser = await chromium.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-infobars',
-        '--window-size=1920,1080',
-        '--lang=ko-KR',
-      ]
-    });
+    this.browser = await chromium.launchPersistentContext(
+      'C:\\EV-System\\chrome-tiktok-profile',
+      {
+        headless: false,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-infobars',
+          '--window-size=1920,1080',
+          '--lang=ko-KR',
+        ],
+        viewport: { width: 1920, height: 1080 },
+        locale: 'ko-KR',
+        timezoneId: 'Asia/Seoul',
+      }
+    );
     return this.browser;
   }
 
@@ -39,23 +45,14 @@ class TikTokScraper {
    */
   async applyStealthScripts(page) {
     await page.addInitScript(() => {
-      // webdriver 속성 숨기기
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-      // chrome 객체 추가
       window.chrome = { runtime: {} };
-
-      // plugins 설정
       Object.defineProperty(navigator, 'plugins', {
         get: () => [1, 2, 3, 4, 5]
       });
-
-      // languages 설정
       Object.defineProperty(navigator, 'languages', {
         get: () => ['ko-KR', 'ko', 'en-US', 'en']
       });
-
-      // permissions 쿼리 오버라이드
       const originalQuery = window.navigator.permissions.query;
       window.navigator.permissions.query = (parameters) =>
         parameters.name === 'notifications'
@@ -68,18 +65,7 @@ class TikTokScraper {
    * 새 페이지 생성 (스텔스 설정 적용)
    */
   async createPage() {
-    const context = await this.browser.newContext({
-      userAgent: this.USER_AGENT,
-      viewport: { width: 1920, height: 1080 },
-      locale: 'ko-KR',
-      timezoneId: 'Asia/Seoul',
-      extraHTTPHeaders: {
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-        'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="131", "Google Chrome";v="131"',
-        'sec-ch-ua-platform': '"Windows"',
-      }
-    });
-    const page = await context.newPage();
+    const page = await this.browser.newPage();
     await this.applyStealthScripts(page);
     return page;
   }
@@ -103,7 +89,7 @@ class TikTokScraper {
       if (!this.browser) await this.initBrowser();
       page = await this.createPage();
 
-      // === Step 1: TikTok 검색 페이지 이동 ===
+      // === Step 1: TikTok 검색 페이지 이동 (동영상 탭) ===
       if (progressCallback) progressCallback('searching', 10, '검색 페이지 로딩 중...');
       
       const searchUrl = `https://www.tiktok.com/search/video?q=${encodeURIComponent(keyword)}`;
@@ -119,16 +105,39 @@ class TikTokScraper {
       await this.randomDelay(3000, 5000);
       if (progressCallback) progressCallback('searching', 20, '검색 결과 로딩 중...');
 
-      // === Step 2: 검색 결과 컨테이너 대기 ===
-      // TikTok 검색 결과는 여러 셀렉터 패턴이 가능
+      // === Step 2: 스크롤 + 검색 결과 컨테이너 대기 ===
+      // 먼저 비디오 링크가 나올 때까지 대기
+      try {
+        await page.waitForSelector('a[href*="/video/"]', { timeout: 10000 });
+        console.log('✅ Initial videos loaded');
+      } catch {
+        console.log('⚠️ Waiting for initial load...');
+        await this.randomDelay(3000, 5000);
+      }
+
+      // 30개 이상 수집하려면 스크롤해서 더 많은 콘텐츠 로딩
+      if (topN > 10) {
+        console.log('📜 Scrolling to load more results...');
+        // 페이지 클릭하여 포커스 부여
+        await page.mouse.click(960, 500);
+        await this.randomDelay(500, 1000);
+        for (let i = 0; i < 10; i++) {
+          await page.keyboard.press('End');
+          await this.randomDelay(2000, 3000);
+          const count = await page.evaluate(() => document.querySelectorAll('a[href*="/video/"]').length);
+          console.log(`   스크롤 ${i + 1}/10 - 현재 ${count}개`);
+          if (count >= topN) break;
+        }
+      }
+      // 동영상 탭 + 인기 탭 모두 지원하는 셀렉터
       const containerSelectors = [
+        'a[href*="/video/"]',
         'div[data-e2e="search_top-item-list"]',
         'div[data-e2e="search-common-link"]',
         'div[id^="column-item-video-container"]',
         'div[class*="DivItemContainerV2"]',
         'div[class*="search-card"]',
       ];
-
       let containerFound = false;
       for (const selector of containerSelectors) {
         try {
@@ -277,7 +286,7 @@ class TikTokScraper {
       throw err;
     } finally {
       if (page) {
-        try { await page.context().close(); } catch {}
+        try { await page.close(); } catch {}
       }
     }
   }
@@ -312,7 +321,6 @@ class TikTokScraper {
           .filter(Boolean);
       };
 
-      // 크리에이터 ID
       const creatorId = getText([
         '[data-e2e="video-author-uniqueid"]',
         'h3[data-e2e="video-author-uniqueid"]',
@@ -320,48 +328,40 @@ class TikTokScraper {
         'a[data-e2e="video-author-avatar"] + * span',
       ]);
 
-      // 크리에이터 이름
       const creatorName = getText([
         '[data-e2e="video-author-nickname"]',
         'span[data-e2e="video-author-nickname"]',
       ]);
 
-      // 게시 날짜
       const postedDate = getText([
         'span[data-e2e="browser-nickname"] span:last-child',
         '[class*="SpanOtherInfos"] span:last-child',
       ]);
 
-      // 설명
       const descSpans = getAll('[data-e2e="video-desc"] span');
       const description = descSpans.join(' ') || getText(['[data-e2e="video-desc"]']);
 
-      // 좋아요
       const likes = getText([
         '[data-e2e="like-count"]',
         '[data-e2e="browse-like-count"]',
         'strong[data-e2e="like-count"]',
       ]);
 
-      // 댓글
       const comments = getText([
         '[data-e2e="comment-count"]',
         '[data-e2e="browse-comment-count"]',
         'strong[data-e2e="comment-count"]',
       ]);
 
-      // 즐겨찾기 (북마크)
       const bookmarks = getText([
         '[data-e2e="undefined-count"]',
         '[data-e2e="bookmark-count"]',
       ]);
 
-      // 공유
       const shares = getText([
         '[data-e2e="share-count"]',
       ]);
 
-      // 조회수
       const views = getText([
         '[data-e2e="video-views"]',
         'strong[data-e2e="video-views"]',
@@ -426,7 +426,6 @@ class TikTokScraper {
           const json = JSON.parse(script.textContent);
           const scope = json['__DEFAULT_SCOPE__'] || {};
           
-          // 검색 결과 데이터 경로 탐색
           const searchData = scope['webapp.search-detail'] || {};
           const itemList = searchData.itemList || searchData.data || [];
           
@@ -462,7 +461,7 @@ class TikTokScraper {
    */
   async close() {
     if (this.browser) {
-      await this.browser.close();
+      try { await this.browser.close(); } catch {}
       this.browser = null;
     }
   }
