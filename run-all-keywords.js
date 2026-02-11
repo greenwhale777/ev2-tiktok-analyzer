@@ -1,11 +1,12 @@
 /**
- * ?�체 ?�워???�동 ?�크?�핑 ?�크립트
+ * 전체 키워드 자동 스크래핑 스크립트
  * 
- * DB???�록??모든 ?�성 ?�워?��? ?�차?�으�??�크?�핑?�고 결과�?DB???�?? * Windows ?�업 ?��?줄러?�서 매일 ?�전 10?�에 ?�행
+ * DB에 등록된 모든 활성 키워드를 순차적으로 스크래핑하고 결과를 DB에 저장
+ * Windows 작업 스케줄러에서 매일 오전 10시에 실행
  * 
- * ?�용�?
+ * 사용법:
  *   node run-all-keywords.js
- *   node run-all-keywords.js 10    (?�워?�당 ?�위 10�? 기본�?
+ *   node run-all-keywords.js 10    (키워드당 상위 10개, 기본값 30)
  */
 
 require('dotenv').config();
@@ -16,7 +17,7 @@ const topN = parseInt(process.argv[2]) || 30;
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
-  console.error('??DATABASE_URL ?�경변?��? ?�정?��? ?�았?�니??');
+  console.error('❌ DATABASE_URL 환경변수가 설정되지 않았습니다.');
   process.exit(1);
 }
 
@@ -25,7 +26,7 @@ const pool = new Pool({
   ssl: DATABASE_URL.includes('railway') ? { rejectUnauthorized: false } : false
 });
 
-// ?�레그램 ?�림 (?�택)
+// 텔레그램 알림 (선택)
 async function sendTelegram(message) {
   try {
     const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -41,10 +42,10 @@ async function sendTelegram(message) {
   } catch {}
 }
 
-// ?�전 검??결과?� 비교 분석
+// 이전 검색 결과와 비교 분석
 async function analyzeChanges(keyword, currentVideos, searchId) {
   try {
-    // 직전 ?�공??검??찾기
+    // 직전 성공한 검색 찾기
     const prevSearch = await pool.query(
       `SELECT id FROM tiktok_searches 
        WHERE keyword = $1 AND status = 'completed' AND id < $2
@@ -53,7 +54,7 @@ async function analyzeChanges(keyword, currentVideos, searchId) {
     );
 
     if (prevSearch.rows.length === 0) {
-      return { isFirst: true, summary: '�?번째 검??- 비교 ?�이???�음' };
+      return { isFirst: true, summary: '첫번째 검색 - 비교 데이터 없음' };
     }
 
     const prevId = prevSearch.rows[0].id;
@@ -69,16 +70,19 @@ async function analyzeChanges(keyword, currentVideos, searchId) {
     currentVideos.forEach(v => { currentMap[v.videoUrl] = v; });
 
     // 분석
-    const newEntries = []; // ?�규 진입
-    const exited = [];     // ?�탈
-    const rankChanges = []; // ?�위 변??    const statChanges = []; // 지??급�?
+    const newEntries = []; // 신규 진입
+    const exited = [];     // 이탈
+    const rankChanges = []; // 순위 변동
+    const statChanges = []; // 지표 급등
 
-    // ?�규 진입 & ?�위/지??변??    currentVideos.forEach(curr => {
+    // 신규 진입 & 순위/지표 변동
+    currentVideos.forEach(curr => {
       const prev = prevMap[curr.videoUrl];
       if (!prev) {
         newEntries.push({ rank: curr.rank, creatorId: curr.creatorId, url: curr.videoUrl });
       } else {
-        // ?�위 변??        const rankDiff = prev.rank - curr.rank;
+        // 순위 변동
+        const rankDiff = prev.rank - curr.rank;
         if (rankDiff !== 0) {
           rankChanges.push({
             creatorId: curr.creatorId,
@@ -88,24 +92,26 @@ async function analyzeChanges(keyword, currentVideos, searchId) {
           });
         }
 
-        // 좋아??변??        const prevLikes = parseInt(prev.likes) || 0;
+        // 좋아요 변동
+        const prevLikes = parseInt(prev.likes) || 0;
         const currLikes = parseInt(curr.likes) || 0;
         if (prevLikes > 0 && currLikes > prevLikes * 1.5) {
           statChanges.push({
             creatorId: curr.creatorId,
-            metric: '좋아??,
+            metric: '좋아요',
             old: prevLikes,
             new: currLikes,
             changePercent: Math.round((currLikes - prevLikes) / prevLikes * 100)
           });
         }
 
-        // 조회??변??        const prevViews = parseInt(prev.views) || 0;
+        // 조회수 변동
+        const prevViews = parseInt(prev.views) || 0;
         const currViews = parseInt(curr.views) || 0;
         if (prevViews > 0 && currViews > prevViews * 1.5) {
           statChanges.push({
             creatorId: curr.creatorId,
-            metric: '조회??,
+            metric: '조회수',
             old: prevViews,
             new: currViews,
             changePercent: Math.round((currViews - prevViews) / prevViews * 100)
@@ -114,7 +120,7 @@ async function analyzeChanges(keyword, currentVideos, searchId) {
       }
     });
 
-    // ?�탈 (?�전???�었?�데 ?�재 ?�는 �?
+    // 이탈 (이전에 있었는데 현재 없는 것)
     prevVideos.rows.forEach(prev => {
       if (!currentMap[prev.video_url]) {
         exited.push({ rank: prev.rank, creatorId: prev.creator_id, url: prev.video_url });
@@ -123,15 +129,17 @@ async function analyzeChanges(keyword, currentVideos, searchId) {
 
     const analysis = { isFirst: false, newEntries, exited, rankChanges, statChanges };
 
-    // 분석 결과�?DB???�??    const summary = [];
-    if (newEntries.length > 0) summary.push(`?�� ?�규 ${newEntries.length}�?);
-    if (exited.length > 0) summary.push(`?�� ?�탈 ${exited.length}�?);
-    if (rankChanges.length > 0) summary.push(`?�� ?�위변??${rankChanges.length}�?);
-    if (statChanges.length > 0) summary.push(`?�� 지?�급??${statChanges.length}�?);
+    // 분석 결과를 DB에 저장
+    const summary = [];
+    if (newEntries.length > 0) summary.push(`🆕 신규 ${newEntries.length}건`);
+    if (exited.length > 0) summary.push(`📤 이탈 ${exited.length}건`);
+    if (rankChanges.length > 0) summary.push(`📊 순위변동 ${rankChanges.length}건`);
+    if (statChanges.length > 0) summary.push(`📈 지표급등 ${statChanges.length}건`);
 
-    analysis.summary = summary.length > 0 ? summary.join(' | ') : '변???�음';
+    analysis.summary = summary.length > 0 ? summary.join(' | ') : '변동 없음';
 
-    // analysis JSON??searches ?�이블에 ?�??    await pool.query(
+    // analysis JSON을 searches 테이블에 저장
+    await pool.query(
       `ALTER TABLE tiktok_searches ADD COLUMN IF NOT EXISTS analysis JSONB`,
       []
     ).catch(() => {});
@@ -144,8 +152,8 @@ async function analyzeChanges(keyword, currentVideos, searchId) {
     return analysis;
 
   } catch (err) {
-    console.error('분석 ?�류:', err.message);
-    return { isFirst: true, summary: '분석 ?�패' };
+    console.error('분석 오류:', err.message);
+    return { isFirst: true, summary: '분석 실패' };
   }
 }
 
@@ -156,37 +164,37 @@ async function run() {
 
   try {
     console.log(`\n${'='.repeat(60)}`);
-    console.log(`?�� TikTok ?�체 ?�워???�동 ?�크?�핑`);
-    console.log(`?�� ${startTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}`);
-    console.log(`?�� ?�워?�당 ?�위 ${topN}�??�집`);
+    console.log(`🚀 TikTok 전체 키워드 자동 스크래핑`);
+    console.log(`📅 ${startTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}`);
+    console.log(`📌 키워드당 상위 ${topN}개 수집`);
     console.log(`${'='.repeat(60)}\n`);
 
-    // analysis 컬럼 추�? (?�으�?
+    // analysis 컬럼 추가 (없으면)
     await pool.query(
       `ALTER TABLE tiktok_searches ADD COLUMN IF NOT EXISTS analysis JSONB`
     ).catch(() => {});
 
-    // DB?�서 ?�성 ?�워??조회
+    // DB에서 활성 키워드 조회
     const kwResult = await pool.query(
       `SELECT id, keyword FROM tiktok_keywords WHERE is_active = true ORDER BY id`
     );
 
     if (kwResult.rows.length === 0) {
-      console.log('?�️ ?�록???�성 ?�워?��? ?�습?�다.');
+      console.log('⚠️ 등록된 활성 키워드가 없습니다.');
       return;
     }
 
-    console.log(`?�� ?�성 ?�워??${kwResult.rows.length}�? ${kwResult.rows.map(r => r.keyword).join(', ')}\n`);
+    console.log(`📋 활성 키워드 ${kwResult.rows.length}개: ${kwResult.rows.map(r => r.keyword).join(', ')}\n`);
 
-    // �??�워?�별 ?�크?�핑
+    // 각 키워드별 스크래핑
     for (const kw of kwResult.rows) {
       const kwStart = Date.now();
-      console.log(`\n${'?�'.repeat(50)}`);
-      console.log(`?�� [${kw.keyword}] ?�크?�핑 ?�작...`);
+      console.log(`\n${'─'.repeat(50)}`);
+      console.log(`🔍 [${kw.keyword}] 스크래핑 시작...`);
 
       let searchId = null;
       try {
-        // 검??기록 ?�성
+        // 검색 기록 생성
         const searchResult = await pool.query(
           `INSERT INTO tiktok_searches (keyword_id, keyword, status) 
            VALUES ($1, $2, 'running') RETURNING id`,
@@ -194,13 +202,14 @@ async function run() {
         );
         searchId = searchResult.rows[0].id;
 
-        // ?�크?�핑 ?�행
+        // 스크래핑 실행
         const videos = await scraper.searchKeyword(kw.keyword, topN, (status, percent, msg) => {
           process.stdout.write(`\r   [${percent}%] ${msg}          `);
         });
         console.log('');
 
-        // DB??비디???�??        for (const video of videos) {
+        // DB에 비디오 저장
+        for (const video of videos) {
           await pool.query(
             `INSERT INTO tiktok_videos 
              (search_id, rank, video_url, creator_id, creator_name, description, posted_date, likes, comments, bookmarks, shares, views)
@@ -211,18 +220,18 @@ async function run() {
           );
         }
 
-        // 검???�태 ?�데?�트
+        // 검색 상태 업데이트
         await pool.query(
           `UPDATE tiktok_searches SET status = 'completed', video_count = $1, completed_at = NOW() WHERE id = $2`,
           [videos.length, searchId]
         );
 
-        // 변??분석
+        // 변동 분석
         const analysis = await analyzeChanges(kw.keyword, videos, searchId);
 
         const elapsed = ((Date.now() - kwStart) / 1000).toFixed(1);
-        console.log(`   ??${videos.length}�??�집 ?�료 (${elapsed}�?`);
-        console.log(`   ?�� 분석: ${analysis.summary}`);
+        console.log(`   ✅ ${videos.length}개 수집 완료 (${elapsed}초)`);
+        console.log(`   📊 분석: ${analysis.summary}`);
 
         results.push({
           keyword: kw.keyword,
@@ -232,20 +241,20 @@ async function run() {
           elapsed
         });
 
-        // ?�워???�데?�트 ?�간 갱신
+        // 키워드 업데이트 시간 갱신
         await pool.query(
           `UPDATE tiktok_keywords SET updated_at = NOW() WHERE id = $1`,
           [kw.id]
         );
 
-        // ?�워??�??�레??(�?감�? 방�?)
+        // 키워드 간 딜레이 (봇감지 방지)
         if (kwResult.rows.indexOf(kw) < kwResult.rows.length - 1) {
-          console.log('   ???�음 ?�워?�까지 10�??��?..');
+          console.log('   ⏳ 다음 키워드까지 10초 대기...');
           await new Promise(r => setTimeout(r, 10000));
         }
 
       } catch (err) {
-        console.log(`\n   ???�패: ${err.message}`);
+        console.log(`\n   ❌ 실패: ${err.message}`);
         if (searchId) {
           await pool.query(
             `UPDATE tiktok_searches SET status = 'failed', error = $1, completed_at = NOW() WHERE id = $2`,
@@ -256,40 +265,40 @@ async function run() {
       }
     }
 
-    // === 최종 리포??===
+    // === 최종 리포트 ===
     const totalTime = ((Date.now() - startTime.getTime()) / 1000).toFixed(1);
     const successCount = results.filter(r => r.status === 'success').length;
     const failCount = results.filter(r => r.status === 'failed').length;
 
     console.log(`\n${'='.repeat(60)}`);
-    console.log(`?�� ?�행 결과 리포??);
+    console.log(`📊 실행 결과 리포트`);
     console.log(`${'='.repeat(60)}`);
     results.forEach(r => {
-      const icon = r.status === 'success' ? '?? : '??;
-      console.log(`${icon} ${r.keyword}: ${r.count}�?${r.status === 'success' ? `(${r.elapsed}�? - ${r.analysis}` : `- ${r.error}`}`);
+      const icon = r.status === 'success' ? '✅' : '❌';
+      console.log(`${icon} ${r.keyword}: ${r.count}개 ${r.status === 'success' ? `(${r.elapsed}초) - ${r.analysis}` : `- ${r.error}`}`);
     });
-    console.log(`\n?�️ �??�요?�간: ${totalTime}�?| ?�공: ${successCount} | ?�패: ${failCount}`);
+    console.log(`\n⏱️ 총 소요시간: ${totalTime}초 | 성공: ${successCount} | 실패: ${failCount}`);
 
-    // ?�레그램 ?�림
-    let teleMsg = `?�� <b>TikTok ?�동 ?�크?�핑 ?�료</b>\n`;
-    teleMsg += `?�� ${startTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}\n\n`;
+    // 텔레그램 알림
+    let teleMsg = `🚀 <b>TikTok 자동 스크래핑 완료</b>\n`;
+    teleMsg += `📅 ${startTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}\n\n`;
     results.forEach(r => {
-      const icon = r.status === 'success' ? '?? : '??;
-      teleMsg += `${icon} <b>${r.keyword}</b>: ${r.count}�?;
+      const icon = r.status === 'success' ? '✅' : '❌';
+      teleMsg += `${icon} <b>${r.keyword}</b>: ${r.count}개`;
       if (r.analysis) teleMsg += ` | ${r.analysis}`;
       if (r.error) teleMsg += ` | ${r.error}`;
       teleMsg += '\n';
     });
-    teleMsg += `\n?�️ ${totalTime}�?| ?�공 ${successCount} | ?�패 ${failCount}`;
+    teleMsg += `\n⏱️ ${totalTime}초 | 성공 ${successCount} | 실패 ${failCount}`;
     await sendTelegram(teleMsg);
 
   } catch (err) {
-    console.error(`\n???�체 ?�류: ${err.message}`);
-    await sendTelegram(`??TikTok ?�동 ?�크?�핑 ?�류: ${err.message}`);
+    console.error(`\n❌ 전체 오류: ${err.message}`);
+    await sendTelegram(`❌ TikTok 자동 스크래핑 오류: ${err.message}`);
   } finally {
     await scraper.close();
     await pool.end();
-    console.log('\n?�� 종료');
+    console.log('\n🔚 종료');
   }
 }
 

@@ -240,6 +240,12 @@ async function processPendingTasks() {
         const results = [];
 
         for (const kw of kwResult.rows) {
+          // 취소 여부 확인
+          const taskCheck = await pool.query('SELECT status FROM tiktok_tasks WHERE id = $1', [task.id]);
+          if (taskCheck.rows[0]?.status === 'cancelled') {
+            console.log('   ⏹ 작업이 취소되었습니다. 중단합니다.');
+            return true;
+          }
           // 현재 처리 중인 키워드를 task에 업데이트 (대시보드 표시용)
           await pool.query(
             `UPDATE tiktok_tasks SET keyword = $1 WHERE id = $2`,
