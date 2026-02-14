@@ -404,8 +404,8 @@ async function run() {
       let searchId = null;
       try {
         const searchResult = await pool.query(
-          `INSERT INTO tiktok_searches (keyword_id, keyword, status, source) 
-           VALUES ($1, $2, 'running', 'scheduled') RETURNING id`,
+          `INSERT INTO tiktok_searches (keyword_id, keyword, status) 
+           VALUES ($1, $2, 'running') RETURNING id`,
           [kw.id, kw.keyword]
         );
         searchId = searchResult.rows[0].id;
@@ -463,11 +463,10 @@ async function run() {
           [kw.id]
         );
 
-        // 키워드 간 랜덤 딜레이 (15~30초)
+        // 키워드 간 딜레이
         if (kwResult.rows.indexOf(kw) < kwResult.rows.length - 1) {
-          var kwDelay = Math.floor(Math.random() * 15000) + 15000;
-          console.log('   ⏳ 다음 키워드까지 ' + (kwDelay / 1000).toFixed(1) + '초 대기...');
-          await new Promise(function(r) { setTimeout(r, kwDelay); });
+          console.log('   ⏳ 다음 키워드까지 10초 대기...');
+          await new Promise(function(r) { setTimeout(r, 10000); });
         }
 
       } catch (err) {

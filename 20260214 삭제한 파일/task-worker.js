@@ -347,7 +347,7 @@ async function executeSearch(scraper, keyword, topN) {
     var keywordId = kwResult.rows[0].id;
 
     var searchResult = await pool.query(
-      'INSERT INTO tiktok_searches (keyword_id, keyword, status, source) VALUES ($1, $2, \'running\', \'dashboard\') RETURNING id',
+      'INSERT INTO tiktok_searches (keyword_id, keyword, status) VALUES ($1, $2, \'running\') RETURNING id',
       [keywordId, keyword]
     );
     searchId = searchResult.rows[0].id;
@@ -466,11 +466,10 @@ async function processPendingTasks() {
             results.push({ keyword: kw.keyword, success: true, count: kwSearchResult.count, analysis: kwSearchResult.analysis });
             console.log('   ✅ ' + kwSearchResult.count + '개 | ' + kwSearchResult.analysis);
 
-            // 키워드 간 랜덤 딜레이 (15~30초)
+            // 키워드 간 딜레이
             if (k < kwResult.rows.length - 1) {
-              var kwDelay = Math.floor(Math.random() * 15000) + 15000;
-              console.log('   ⏳ 다음 키워드까지 ' + (kwDelay / 1000).toFixed(1) + '초 대기...');
-              await new Promise(function(r) { setTimeout(r, kwDelay); });
+              console.log('   ⏳ 10초 대기...');
+              await new Promise(function(r) { setTimeout(r, 10000); });
             }
           } catch (err) {
             results.push({ keyword: kw.keyword, success: false, error: err.message });

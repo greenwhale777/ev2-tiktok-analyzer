@@ -52,58 +52,39 @@ class TikTokScraper {
   }
 
   /**
-   * 캡차 감지 시 SadCaptcha 확장이 자동 해결 대기 (최대 60초)
-   * 실패 시 텔레그램 알림 + 수동 해결 대기 (추가 120초)
+   * 캡차 감지 시 텔레그램 알림 + 수동 해결 대기 (최대 180초)
    */
   async waitForCaptcha(page, keyword) {
     const captchaType = await this.detectCaptcha(page);
     if (!captchaType) return false;
 
     console.log('🔒 캡차 감지됨! (' + captchaType + ')');
-    console.log('   🤖 SadCaptcha 확장 프로그램이 자동 해결 시도 중...');
+    console.log('   ⏳ 수동 해결 대기 중... (최대 180초)');
 
-    // Phase 1: SadCaptcha 확장이 자동으로 풀어줄 때까지 대기 (최대 60초)
-    var waited = 0;
-    var maxAutoWait = 60000;
-    while (waited < maxAutoWait) {
-      await new Promise(r => setTimeout(r, 3000));
-      waited += 3000;
+    // 텔레그램 알림
+    await this.sendTelegramAlert(
+      '🔒 TikTok 캡차 발생!\n' +
+      '📌 키워드: ' + keyword + '\n' +
+      '🔍 감지: ' + captchaType + '\n' +
+      '⏳ 180초 내에 PC에서 캡차를 해결해주세요!'
+    );
 
-      var stillCaptcha = await this.detectCaptcha(page);
+    // 최대 180초 대기
+    const maxWait = 180000;
+    let waited = 0;
+    while (waited < maxWait) {
+      await new Promise(r => setTimeout(r, 5000));
+      waited += 5000;
+
+      const stillCaptcha = await this.detectCaptcha(page);
       if (!stillCaptcha) {
-        console.log('   ✅ 캡차 자동 해결됨! (SadCaptcha, ' + (waited / 1000) + '초)');
-        await this.sendTelegramAlert('✅ 캡차 자동 해결! [' + keyword + '] (' + (waited / 1000) + '초)');
+        console.log('   ✅ 캡차 해결됨! 스크래핑 계속...');
+        await this.sendTelegramAlert('✅ 캡차 해결됨! [' + keyword + '] 스크래핑 재개');
         await new Promise(r => setTimeout(r, 2000));
         return true;
       }
 
       console.log('   ⏳ 캡차 대기 중... (' + (waited / 1000) + '초)');
-    }
-
-    // Phase 2: 자동 해결 실패 → 텔레그램 알림 + 수동 대기 (추가 120초)
-    console.log('   ⚠️ SadCaptcha 자동 해결 실패 - 수동 해결 대기...');
-    await this.sendTelegramAlert(
-      '🔒 TikTok 캡차 자동 해결 실패!\n' +
-      '📌 키워드: ' + keyword + '\n' +
-      '🔍 감지: ' + captchaType + '\n' +
-      '⏳ 120초 내에 PC에서 수동으로 해결해주세요!'
-    );
-
-    var maxManualWait = 120000;
-    var manualWaited = 0;
-    while (manualWaited < maxManualWait) {
-      await new Promise(r => setTimeout(r, 5000));
-      manualWaited += 5000;
-
-      var stillCaptcha2 = await this.detectCaptcha(page);
-      if (!stillCaptcha2) {
-        console.log('   ✅ 캡차 수동 해결됨! 스크래핑 계속...');
-        await this.sendTelegramAlert('✅ 캡차 수동 해결! [' + keyword + '] 스크래핑 재개');
-        await new Promise(r => setTimeout(r, 2000));
-        return true;
-      }
-
-      console.log('   ⏳ 수동 대기 중... (' + ((60000 + manualWaited) / 1000) + '초)');
     }
 
     console.log('   ❌ 캡차 타임아웃 - 이 키워드 스킵');
@@ -132,9 +113,6 @@ class TikTokScraper {
    * 브라우저 초기화 (일반 Chrome 사용으로 캡차 우회)
    */
   async initBrowser() {
-    // SadCaptcha 확장 프로그램 경로
-    const sadcaptchaExtPath = 'C:\\Users\\a\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Extensions\\colmpcmlmokfplanmjmnnahkkpgmmbjl\\3.9_0';
-
     this.browser = await chromium.launchPersistentContext(
       'C:\\EV-System\\chrome-tiktok-profile-real',
       {
@@ -159,8 +137,6 @@ class TikTokScraper {
           '--window-size=1920,1080',
           '--lang=ko-KR',
           '--start-maximized',
-          '--disable-web-security',
-          '--load-extension=' + sadcaptchaExtPath,
         ],
         viewport: null,
         locale: 'ko-KR',
@@ -472,14 +448,7 @@ class TikTokScraper {
             views: videoDetail.views || 'N/A',
           });
 
-          // 인간적 패턴: 매 5번째마다 긴 휴식, 나머지는 랜덤 딜레이
-          if ((i + 1) % 5 === 0 && i < topN - 1) {
-            const longPause = Math.floor(Math.random() * 7000) + 8000; // 8~15초
-            console.log(`   ☕ 잠시 휴식... (${(longPause / 1000).toFixed(1)}초)`);
-            await new Promise(r => setTimeout(r, longPause));
-          } else if (i < topN - 1) {
-            await this.randomDelay(3000, 7000); // 3~7초
-          }
+          await this.randomDelay(2000, 4000);
         } catch (err) {
           console.error(`❌ Error scraping video ${i + 1}:`, err.message);
           results.push({
@@ -518,35 +487,7 @@ class TikTokScraper {
       waitUntil: 'domcontentloaded',
       timeout: 20000
     });
-    await this.randomDelay(3000, 6000);
-
-    // 비디오 상세 페이지에서 캡차 감지 → SadCaptcha 자동 해결 모니터링
-    const captchaType = await this.detectCaptcha(page);
-    if (captchaType) {
-      console.log('   🔒 비디오 페이지 캡차 감지! (' + captchaType + ')');
-      console.log('   🤖 SadCaptcha 자동 해결 대기...');
-
-      var waited = 0;
-      var maxWait = 30000; // 비디오 페이지는 30초만 대기
-      while (waited < maxWait) {
-        await new Promise(r => setTimeout(r, 3000));
-        waited += 3000;
-
-        var still = await this.detectCaptcha(page);
-        if (!still) {
-          console.log('   ✅ 비디오 페이지 캡차 자동 해결! (' + (waited / 1000) + '초)');
-          await this.sendTelegramAlert('✅ 비디오 페이지 캡차 자동 해결! [' + videoUrl.split('/').pop() + '] (' + (waited / 1000) + '초)');
-          await new Promise(r => setTimeout(r, 2000));
-          break;
-        }
-        console.log('   ⏳ 비디오 캡차 대기... (' + (waited / 1000) + '초)');
-      }
-
-      if (waited >= maxWait) {
-        console.log('   ⚠️ 비디오 페이지 캡차 타임아웃 - 데이터 추출 시도');
-        await this.sendTelegramAlert('⚠️ 비디오 페이지 캡차 미해결 [' + videoUrl.split('/').pop() + '] - 크레딧 소모 가능');
-      }
-    }
+    await this.randomDelay(2000, 4000);
 
     // 먼저 embedded JSON에서 시도
     const jsonData = await this.extractVideoFromJSON(page);
