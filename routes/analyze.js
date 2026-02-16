@@ -550,8 +550,22 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
     const prevMap = {};
     prevList.forEach(v => { prevMap[v.video_url] = v; });
 
+    const parseNum = (val) => {
+      if (!val || val === 'N/A') return 0;
+      const num = parseInt(val.replace(/,/g, ''));
+      return isNaN(num) ? 0 : num;
+    };
+
     const comparison = todayList.map(video => {
       const prev = prevMap[video.video_url];
+      const views = parseNum(video.views);
+      const prevViews = prev ? parseNum(prev.views) : 0;
+      const likes = parseNum(video.likes);
+      const prevLikes = prev ? parseNum(prev.likes) : 0;
+      const viewsChange = prev ? views - prevViews : 0;
+      const likesChange = prev ? likes - prevLikes : 0;
+      const viewsChangeRate = prevViews > 0 ? ((viewsChange / prevViews) * 100) : 0;
+
       return {
         ...video,
         is_new: !prev,
@@ -559,12 +573,86 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
         rank_change: prev ? prev.rank - video.rank : null,
         prev_views: prev ? prev.views : null,
         prev_likes: prev ? prev.likes : null,
+        views_num: views,
+        prev_views_num: prevViews,
+        likes_num: likes,
+        prev_likes_num: prevLikes,
+        views_change: viewsChange,
+        likes_change: likesChange,
+        views_change_rate: Math.round(viewsChangeRate),
       };
     });
 
     // 이탈 영상
     const todayUrls = new Set(todayList.map(v => v.video_url));
-    const exited = prevList.filter(v => !todayUrls.has(v.video_url));
+    const exited = prevList.filter(v => !todayUrls.has(v.video_url)).map(v => ({
+      ...v,
+      views_num: parseNum(v.views),
+      likes_num: parseNum(v.likes),
+    }));
+
+    // 인사이트 분석
+    const insights = [];
+
+    // 1. 급등 영상 (신규 진입 + 높은 순위)
+    const hotNewEntries = comparison.filter(v => v.is_new && v.rank <= 10);
+    if (hotNewEntries.length > 0) {
+      insights.push({
+        type: 'hot_new',
+        icon: '🔥',
+        label: '신규 급등',
+        desc: 'TOP 10에 새로 진입한 영상',
+        videos: hotNewEntries,
+      });
+    }
+
+    // 2. 순위 급상승 (5순위 이상 상승)
+    const rankUp = comparison.filter(v => !v.is_new && v.rank_change !== null && v.rank_change >= 5);
+    if (rankUp.length > 0) {
+      insights.push({
+        type: 'rank_up',
+        icon: '🚀',
+        label: '순위 급상승',
+        desc: '5순위 이상 상승한 영상',
+        videos: rankUp.sort((a, b) => (b.rank_change || 0) - (a.rank_change || 0)),
+      });
+    }
+
+    // 3. 조회수/좋아요 급등 (기존 영상 중 조회수 50% 이상 증가)
+    const viewsSpike = comparison.filter(v => !v.is_new && v.prev_views_num > 0 && v.views_change_rate >= 50);
+    if (viewsSpike.length > 0) {
+      insights.push({
+        type: 'views_spike',
+        icon: '📈',
+        label: '조회수 급등',
+        desc: '조회수가 50% 이상 증가한 영상',
+        videos: viewsSpike.sort((a, b) => b.views_change_rate - a.views_change_rate),
+      });
+    }
+
+    // 4. 순위 급하락 (5순위 이상 하락)
+    const rankDown = comparison.filter(v => !v.is_new && v.rank_change !== null && v.rank_change <= -5);
+    if (rankDown.length > 0) {
+      insights.push({
+        type: 'rank_down',
+        icon: '📉',
+        label: '순위 급하락',
+        desc: '5순위 이상 하락한 영상',
+        videos: rankDown.sort((a, b) => (a.rank_change || 0) - (b.rank_change || 0)),
+      });
+    }
+
+    // 5. 인기 이탈 (전일 TOP 10이었으나 이탈)
+    const hotExited = exited.filter(v => v.rank <= 10);
+    if (hotExited.length > 0) {
+      insights.push({
+        type: 'hot_exited',
+        icon: '💨',
+        label: 'TOP 10 이탈',
+        desc: '전일 TOP 10에서 사라진 영상',
+        videos: hotExited,
+      });
+    }
 
     res.json({
       success: true,
@@ -576,6 +664,7 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
         prev_count: prevList.length,
         new_entries: comparison.filter(v => v.is_new).length,
         exited_count: exited.length,
+        insights,
         videos: comparison,
         exited_videos: exited,
       }
