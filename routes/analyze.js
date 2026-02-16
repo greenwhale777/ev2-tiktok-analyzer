@@ -570,8 +570,11 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
       const prevViews = prev ? parseNum(prev.views) : 0;
       const likes = parseNum(video.likes);
       const prevLikes = prev ? parseNum(prev.likes) : 0;
+      const comments = parseNum(video.comments);
+      const prevComments = prev ? parseNum(prev.comments) : 0;
       const viewsChange = prev ? views - prevViews : 0;
       const likesChange = prev ? likes - prevLikes : 0;
+      const commentsChange = prev ? comments - prevComments : 0;
       const viewsChangeRate = prevViews > 0 ? ((viewsChange / prevViews) * 100) : 0;
 
       return {
@@ -581,12 +584,14 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
         rank_change: prev ? prev.rank - video.rank : null,
         prev_views: prev ? prev.views : null,
         prev_likes: prev ? prev.likes : null,
+        prev_comments: prev ? prev.comments : null,
         views_num: views,
         prev_views_num: prevViews,
         likes_num: likes,
         prev_likes_num: prevLikes,
         views_change: viewsChange,
         likes_change: likesChange,
+        comments_change: commentsChange,
         views_change_rate: Math.round(viewsChangeRate),
       };
     });

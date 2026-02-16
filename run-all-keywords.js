@@ -373,21 +373,26 @@ async function run() {
     console.log('📌 키워드당 상위 ' + topN + '개 수집');
     console.log('='.repeat(60) + '\n');
 
-    // 기존 Chrome 프로필 잠금 해제 (프로필 충돌 방지)
+    // 기존 스크래핑 프로필 Chrome 종료 (프로필 충돌 방지)
     try {
-      const fs = require('fs');
-      const lockFile = 'C:\\EV-System\\chrome-tiktok-profile-real\\SingletonLock';
-      const lockFile2 = 'C:\\EV-System\\chrome-tiktok-profile-real\\SingletonCookie';
-      const lockFile3 = 'C:\\EV-System\\chrome-tiktok-profile-real\\SingletonSocket';
-      [lockFile, lockFile2, lockFile3].forEach(function(f) {
-        try { fs.unlinkSync(f); } catch(e) {}
-      });
-      console.log('🔄 Chrome 프로필 잠금 해제 완료');
-      // 시작 프로그램 Chrome 종료 (스크래핑 프로필만)
-      execSync('wmic process where "commandline like \'%chrome-tiktok-profile-real%\'" call terminate', { stdio: 'ignore' });
+      console.log('🔄 스크래핑 프로필 Chrome 정리...');
+      // 1단계: 스크래핑 프로필 Chrome 프로세스만 종료
+      try {
+        execSync('powershell -Command "Get-WmiObject Win32_Process -Filter \\"name=\'chrome.exe\'\\" | Where-Object { $_.CommandLine -match \'chrome-tiktok-profile-real\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"', { stdio: 'ignore', timeout: 10000 });
+        console.log('   ✅ 스크래핑 프로필 Chrome 종료');
+      } catch(e) {
+        console.log('   ℹ️ 스크래핑 프로필 Chrome 미실행');
+      }
       await new Promise(r => setTimeout(r, 3000));
+      
+      // 2단계: Lock 파일 삭제 (안전장치)
+      const fs = require('fs');
+      ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].forEach(function(f) {
+        try { fs.unlinkSync('C:\\EV-System\\chrome-tiktok-profile-real\\' + f); } catch(e) {}
+      });
+      console.log('   🔓 Lock 파일 정리 완료');
     } catch (e) {
-      console.log('   ℹ️ 프로필 잠금 파일 없음');
+      console.log('   ℹ️ Chrome 정리 스킵');
     }
 
     // 스크래퍼 브라우저 초기화 (한 번만!)
