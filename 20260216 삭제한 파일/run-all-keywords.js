@@ -11,7 +11,6 @@
 
 require('dotenv').config();
 const { Pool } = require('pg');
-const { execSync } = require('child_process');
 const TikTokScraper = require('./services/scraper');
 
 const topN = parseInt(process.argv[2]) || parseInt(process.env.DEFAULT_TOP_N) || 30;
@@ -373,23 +372,6 @@ async function run() {
     console.log('📌 키워드당 상위 ' + topN + '개 수집');
     console.log('='.repeat(60) + '\n');
 
-    // 기존 Chrome 프로필 잠금 해제 (프로필 충돌 방지)
-    try {
-      const fs = require('fs');
-      const lockFile = 'C:\\EV-System\\chrome-tiktok-profile-real\\SingletonLock';
-      const lockFile2 = 'C:\\EV-System\\chrome-tiktok-profile-real\\SingletonCookie';
-      const lockFile3 = 'C:\\EV-System\\chrome-tiktok-profile-real\\SingletonSocket';
-      [lockFile, lockFile2, lockFile3].forEach(function(f) {
-        try { fs.unlinkSync(f); } catch(e) {}
-      });
-      console.log('🔄 Chrome 프로필 잠금 해제 완료');
-      // 시작 프로그램 Chrome 종료 (스크래핑 프로필만)
-      execSync('wmic process where "commandline like \'%chrome-tiktok-profile-real%\'" call terminate', { stdio: 'ignore' });
-      await new Promise(r => setTimeout(r, 3000));
-    } catch (e) {
-      console.log('   ℹ️ 프로필 잠금 파일 없음');
-    }
-
     // 스크래퍼 브라우저 초기화 (한 번만!)
     await scraper.initBrowser();
 
@@ -544,13 +526,6 @@ async function run() {
     await scraper.close();
     await pool.end();
     console.log('\n🔚 종료');
-
-    // 스크래핑 완료 후 Chrome 프로필 복구 (확장 프로그램 세션 유지용)
-    try {
-      const { exec } = require('child_process');
-      exec('"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir="C:\\EV-System\\chrome-tiktok-profile-real" --no-first-run');
-      console.log('🔄 Chrome 프로필 복구 완료');
-    } catch(e) {}
   }
 }
 

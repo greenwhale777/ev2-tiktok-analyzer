@@ -419,7 +419,7 @@ router.get('/daily-reports', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT 
-        TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as report_date,
+        DATE(completed_at AT TIME ZONE 'Asia/Seoul') as report_date,
         COUNT(DISTINCT keyword) as keyword_count,
         COUNT(*) as search_count,
         SUM(video_count) as total_videos,
@@ -427,7 +427,7 @@ router.get('/daily-reports', async (req, res) => {
         MAX(completed_at) as last_completed
        FROM tiktok_searches 
        WHERE source = 'scheduled' AND status = 'completed'
-       GROUP BY TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')
+       GROUP BY DATE(completed_at AT TIME ZONE 'Asia/Seoul')
        ORDER BY report_date DESC
        LIMIT 30`
     );
