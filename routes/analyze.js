@@ -418,18 +418,22 @@ router.patch('/keywords/:id/toggle', async (req, res) => {
 router.get('/daily-reports', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT 
-        TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as report_date,
+      `WITH latest_per_keyword AS (
+        SELECT DISTINCT ON (TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD'), keyword)
+          id, keyword, video_count, completed_at,
+          TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as report_date
+        FROM tiktok_searches
+        WHERE status = 'completed' AND video_count > 0
+        ORDER BY TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD'), keyword, completed_at DESC
+      )
+      SELECT 
+        report_date,
         COUNT(DISTINCT keyword) as keyword_count,
-        COUNT(*) as search_count,
-        SUM(video_count) as total_videos,
-        MIN(started_at) as first_started,
-        MAX(completed_at) as last_completed
-       FROM tiktok_searches 
-       WHERE source = 'scheduled' AND status = 'completed'
-       GROUP BY TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')
-       ORDER BY report_date DESC
-       LIMIT 30`
+        SUM(video_count) as total_videos
+      FROM latest_per_keyword
+      GROUP BY report_date
+      ORDER BY report_date DESC
+      LIMIT 30`
     );
     res.json({ success: true, data: result.rows });
   } catch (err) {
@@ -442,34 +446,36 @@ router.get('/daily-reports/:date', async (req, res) => {
   try {
     const { date } = req.params;
 
-    // 해당 날짜의 scheduled 검색 결과
+    // 해당 날짜의 키워드별 마지막 수집 결과
     const searches = await pool.query(
-      `SELECT s.id, s.keyword, s.video_count, s.started_at, s.completed_at, s.analysis,
+      `SELECT DISTINCT ON (keyword)
+        s.id, s.keyword, s.video_count, s.started_at, s.completed_at, s.analysis,
         (SELECT COUNT(*) FROM tiktok_videos WHERE search_id = s.id) as actual_video_count
        FROM tiktok_searches s
-       WHERE source = 'scheduled' 
-         AND status = 'completed'
-         AND DATE(s.completed_at AT TIME ZONE 'Asia/Seoul') = $1
-       ORDER BY s.completed_at ASC`,
+       WHERE status = 'completed'
+         AND TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $1
+         AND video_count > 0
+       ORDER BY keyword, s.completed_at DESC`,
       [date]
     );
 
-    // 전일 데이터 가져오기 (비교용)
-    const prevDate = new Date(date);
+    // 전일 데이터 (키워드별 마지막 수집)
+    const prevDate = new Date(date + 'T00:00:00');
     prevDate.setDate(prevDate.getDate() - 1);
     const prevDateStr = prevDate.toISOString().split('T')[0];
 
     const prevSearches = await pool.query(
-      `SELECT s.id, s.keyword, s.video_count, s.analysis
+      `SELECT DISTINCT ON (keyword)
+        s.id, s.keyword, s.video_count, s.analysis
        FROM tiktok_searches s
-       WHERE source = 'scheduled'
-         AND status = 'completed'
-         AND DATE(s.completed_at AT TIME ZONE 'Asia/Seoul') = $1
-       ORDER BY s.completed_at ASC`,
+       WHERE status = 'completed'
+         AND TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $1
+         AND video_count > 0
+       ORDER BY keyword, s.completed_at DESC`,
       [prevDateStr]
     );
 
-    // 키워드별 요약 생성
+    // 키워드별 요약
     const summary = searches.rows.map(search => {
       const prevSearch = prevSearches.rows.find(p => p.keyword === search.keyword);
       return {
@@ -501,26 +507,28 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
   try {
     const { date, keyword } = req.params;
 
-    // 당일 데이터
+    // 당일 마지막 수집
     const todaySearch = await pool.query(
       `SELECT s.id FROM tiktok_searches s
-       WHERE source = 'scheduled' AND status = 'completed'
+       WHERE status = 'completed'
          AND s.keyword = $1
-         AND DATE(s.completed_at AT TIME ZONE 'Asia/Seoul') = $2
+         AND TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $2
+         AND video_count > 0
        ORDER BY s.completed_at DESC LIMIT 1`,
       [keyword, date]
     );
 
-    // 전일 데이터
-    const prevDate = new Date(date);
+    // 전일 마지막 수집
+    const prevDate = new Date(date + 'T00:00:00');
     prevDate.setDate(prevDate.getDate() - 1);
     const prevDateStr = prevDate.toISOString().split('T')[0];
 
     const prevSearch = await pool.query(
       `SELECT s.id FROM tiktok_searches s
-       WHERE source = 'scheduled' AND status = 'completed'
+       WHERE status = 'completed'
          AND s.keyword = $1
-         AND DATE(s.completed_at AT TIME ZONE 'Asia/Seoul') = $2
+         AND TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $2
+         AND video_count > 0
        ORDER BY s.completed_at DESC LIMIT 1`,
       [keyword, prevDateStr]
     );
