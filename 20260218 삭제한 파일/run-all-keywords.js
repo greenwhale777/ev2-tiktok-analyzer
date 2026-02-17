@@ -201,7 +201,6 @@ async function checkAndLogin(browser) {
       try {
         if (googlePage.url().includes('accounts.google.com')) {
           console.log('   📱 2단계 인증 대기 중... (최대 120초)');
-          await sendTelegram('📱 <b>TikTok 로그인 - 2FA 인증 필요</b>\n\n120초 내에 폰에서 Google 로그인을 승인해주세요!');
           const maxWait = 120000;
           let waited = 0;
           while (waited < maxWait) {
@@ -487,15 +486,6 @@ async function run() {
           [kw.id]
         );
 
-        // 목표 미달 시 즉시 로그인 체크
-        if (videos.length < topN) {
-          console.log('   ⚠️ 목표 미달 (' + videos.length + '/' + topN + ') - 로그인 상태 확인...');
-          const loginOk = await checkAndLogin(scraper.browser);
-          if (!loginOk) {
-            console.log('   🔓 로그인 복구 시도 후 진행합니다.');
-          }
-        }
-
         // 키워드 간 랜덤 딜레이 (15~30초)
         if (kwResult.rows.indexOf(kw) < kwResult.rows.length - 1) {
           var kwDelay = Math.floor(Math.random() * 15000) + 15000;
@@ -560,13 +550,6 @@ async function run() {
       console.log('\n' + '='.repeat(60));
       console.log('🔄 미완료 키워드 재시도 (' + incompleteResults.length + '개)');
       console.log('='.repeat(60));
-
-      // 재시도 전 로그인 상태 재확인
-      console.log('\n🔑 재시도 전 로그인 상태 확인...');
-      const retryLoginOk = await checkAndLogin(scraper.browser);
-      if (!retryLoginOk) {
-        console.log('⚠️ 로그인 복구 실패 - 로그인 없이 재시도합니다.');
-      }
 
       const retryResults = [];
       for (const incomplete of incompleteResults) {

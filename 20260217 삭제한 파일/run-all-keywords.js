@@ -201,7 +201,6 @@ async function checkAndLogin(browser) {
       try {
         if (googlePage.url().includes('accounts.google.com')) {
           console.log('   📱 2단계 인증 대기 중... (최대 120초)');
-          await sendTelegram('📱 <b>TikTok 로그인 - 2FA 인증 필요</b>\n\n120초 내에 폰에서 Google 로그인을 승인해주세요!');
           const maxWait = 120000;
           let waited = 0;
           while (waited < maxWait) {
@@ -487,15 +486,6 @@ async function run() {
           [kw.id]
         );
 
-        // 목표 미달 시 즉시 로그인 체크
-        if (videos.length < topN) {
-          console.log('   ⚠️ 목표 미달 (' + videos.length + '/' + topN + ') - 로그인 상태 확인...');
-          const loginOk = await checkAndLogin(scraper.browser);
-          if (!loginOk) {
-            console.log('   🔓 로그인 복구 시도 후 진행합니다.');
-          }
-        }
-
         // 키워드 간 랜덤 딜레이 (15~30초)
         if (kwResult.rows.indexOf(kw) < kwResult.rows.length - 1) {
           var kwDelay = Math.floor(Math.random() * 15000) + 15000;
@@ -528,169 +518,29 @@ async function run() {
     const totalTimeStr = formatTime(totalSeconds);
     const successCount = results.filter(function(r) { return r.status === 'success'; }).length;
     const failCount = results.filter(function(r) { return r.status === 'failed'; }).length;
-    const incompleteResults = results.filter(function(r) { return r.status === 'success' && r.count < topN; });
 
     console.log('\n' + '='.repeat(60));
-    console.log('📊 1차 실행 결과');
+    console.log('📊 실행 결과 리포트');
     console.log('='.repeat(60));
     results.forEach(function(r) {
-      const icon = r.status === 'success' ? (r.count < topN ? '⚠️' : '✅') : '❌';
+      const icon = r.status === 'success' ? '✅' : '❌';
       const detail = r.status === 'success' ? '(' + r.elapsed + '초) - ' + r.analysis : '- ' + r.error;
-      console.log(icon + ' ' + r.keyword + ': ' + r.count + '/' + topN + '개 ' + detail);
+      console.log(icon + ' ' + r.keyword + ': ' + r.count + '개 ' + detail);
     });
     console.log('\n⏱️ 총 소요시간: ' + totalTimeStr + ' | 성공: ' + successCount + ' | 실패: ' + failCount);
 
-    // 1차 텔레그램 알림
-    let teleMsg = '🚀 <b>TikTok 1차 스크래핑 완료</b>\n';
+    // 텔레그램 알림
+    let teleMsg = '🚀 <b>TikTok 자동 스크래핑 완료</b>\n';
     teleMsg += '📅 ' + startTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + '\n\n';
     results.forEach(function(r) {
-      const icon = r.status === 'success' ? (r.count < topN ? '⚠️' : '✅') : '❌';
-      teleMsg += icon + ' <b>' + r.keyword + '</b>: ' + r.count + '/' + topN + '개';
+      const icon = r.status === 'success' ? '✅' : '❌';
+      teleMsg += icon + ' <b>' + r.keyword + '</b>: ' + r.count + '개';
       if (r.analysis) teleMsg += ' | ' + r.analysis;
       if (r.error) teleMsg += ' | ' + r.error;
       teleMsg += '\n';
     });
     teleMsg += '\n⏱️ ' + totalTimeStr + ' | 성공 ' + successCount + ' | 실패 ' + failCount;
-
-    // 미완료 키워드 재시도
-    if (incompleteResults.length > 0) {
-      teleMsg += '\n\n🔄 <b>미완료 ' + incompleteResults.length + '개 키워드 재시도 시작</b>';
-      await sendTelegram(teleMsg);
-
-      console.log('\n' + '='.repeat(60));
-      console.log('🔄 미완료 키워드 재시도 (' + incompleteResults.length + '개)');
-      console.log('='.repeat(60));
-
-      // 재시도 전 로그인 상태 재확인
-      console.log('\n🔑 재시도 전 로그인 상태 확인...');
-      const retryLoginOk = await checkAndLogin(scraper.browser);
-      if (!retryLoginOk) {
-        console.log('⚠️ 로그인 복구 실패 - 로그인 없이 재시도합니다.');
-      }
-
-      const retryResults = [];
-      for (const incomplete of incompleteResults) {
-        const retryKw = kwResult.rows.find(function(k) { return k.keyword === incomplete.keyword; });
-        if (!retryKw) continue;
-
-        const retryStart = Date.now();
-        console.log('\n🔁 [' + retryKw.keyword + '] 재시도 (1차: ' + incomplete.count + '/' + topN + '개)');
-
-        let retrySearchId = null;
-        try {
-          const retrySearchResult = await pool.query(
-            `INSERT INTO tiktok_searches (keyword_id, keyword, status, source) 
-             VALUES ($1, $2, 'running', 'scheduled') RETURNING id`,
-            [retryKw.id, retryKw.keyword]
-          );
-          retrySearchId = retrySearchResult.rows[0].id;
-
-          let retryVideos;
-          try {
-            retryVideos = await scraper.searchKeyword(retryKw.keyword, topN, function(status, percent, msg) {
-              process.stdout.write('\r   [' + percent + '%] ' + msg + '          ');
-            });
-          } catch (retryErr2) {
-            if (retryErr2.message === 'CAPTCHA_RESOLVED_RETRY') {
-              retryVideos = await scraper.searchKeyword(retryKw.keyword, topN, function(status, percent, msg) {
-                process.stdout.write('\r   [' + percent + '%] ' + msg + '          ');
-              });
-            } else {
-              throw retryErr2;
-            }
-          }
-          console.log('');
-
-          for (const video of retryVideos) {
-            await pool.query(
-              `INSERT INTO tiktok_videos 
-               (search_id, rank, video_url, creator_id, creator_name, description, posted_date, likes, comments, bookmarks, shares, views)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-              [retrySearchId, video.rank, video.videoUrl, video.creatorId, video.creatorName,
-               video.description, video.postedDate, video.likes, video.comments,
-               video.bookmarks, video.shares, video.views]
-            );
-          }
-
-          await pool.query(
-            `UPDATE tiktok_searches SET status = 'completed', video_count = $1, completed_at = NOW() WHERE id = $2`,
-            [retryVideos.length, retrySearchId]
-          );
-
-          await analyzeChanges(retryKw.keyword, retryVideos, retrySearchId);
-
-          const retryElapsed = ((Date.now() - retryStart) / 1000).toFixed(1);
-          const improved = retryVideos.length > incomplete.count;
-          console.log('   ' + (retryVideos.length >= topN ? '✅' : '⚠️') + ' 재시도: ' + retryVideos.length + '/' + topN + '개 (' + retryElapsed + '초)' + (improved ? ' 📈 개선' : ''));
-
-          retryResults.push({
-            keyword: retryKw.keyword,
-            firstCount: incomplete.count,
-            retryCount: retryVideos.length,
-            improved: improved,
-            status: 'success'
-          });
-
-          await pool.query(`UPDATE tiktok_keywords SET updated_at = NOW() WHERE id = $1`, [retryKw.id]);
-
-          if (incompleteResults.indexOf(incomplete) < incompleteResults.length - 1) {
-            var retryDelay = Math.floor(Math.random() * 15000) + 15000;
-            console.log('   ⏳ 다음 재시도까지 ' + (retryDelay / 1000).toFixed(1) + '초 대기...');
-            await new Promise(function(r) { setTimeout(r, retryDelay); });
-          }
-
-        } catch (retryErr) {
-          console.log('\n   ❌ 재시도 실패: ' + retryErr.message);
-          if (retrySearchId) {
-            await pool.query(
-              `UPDATE tiktok_searches SET status = 'failed', error = $1, completed_at = NOW() WHERE id = $2`,
-              [retryErr.message, retrySearchId]
-            ).catch(function() {});
-          }
-          retryResults.push({ keyword: retryKw.keyword, firstCount: incomplete.count, retryCount: 0, status: 'failed', error: retryErr.message });
-        }
-      }
-
-      // 최종 텔레그램 리포트
-      const finalTotalSeconds = (Date.now() - startTime.getTime()) / 1000;
-      let finalMsg = '📋 <b>TikTok 최종 스크래핑 리포트</b>\n';
-      finalMsg += '📅 ' + startTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + '\n\n';
-
-      // 정상 완료 키워드
-      const fullResults = results.filter(function(r) { return r.status === 'success' && r.count >= topN; });
-      if (fullResults.length > 0) {
-        finalMsg += '✅ <b>정상 완료 (' + fullResults.length + '개)</b>\n';
-        fullResults.forEach(function(r) { finalMsg += '  · ' + r.keyword + ': ' + r.count + '개\n'; });
-        finalMsg += '\n';
-      }
-
-      // 재시도 결과
-      finalMsg += '🔄 <b>재시도 결과 (' + retryResults.length + '개)</b>\n';
-      retryResults.forEach(function(r) {
-        if (r.status === 'success') {
-          const icon = r.retryCount >= topN ? '✅' : '⚠️';
-          finalMsg += icon + ' ' + r.keyword + ': ' + r.firstCount + '→' + r.retryCount + '/' + topN + '개';
-          if (r.improved) finalMsg += ' 📈';
-          finalMsg += '\n';
-        } else {
-          finalMsg += '❌ ' + r.keyword + ': 재시도 실패\n';
-        }
-      });
-
-      // 실패 키워드
-      const failedResults = results.filter(function(r) { return r.status === 'failed'; });
-      if (failedResults.length > 0) {
-        finalMsg += '\n❌ <b>실패 (' + failedResults.length + '개)</b>\n';
-        failedResults.forEach(function(r) { finalMsg += '  · ' + r.keyword + ': ' + r.error + '\n'; });
-      }
-
-      finalMsg += '\n⏱️ 총 소요: ' + formatTime(finalTotalSeconds);
-      await sendTelegram(finalMsg);
-
-    } else {
-      // 모두 정상 완료
-      await sendTelegram(teleMsg);
-    }
+    await sendTelegram(teleMsg);
 
   } catch (err) {
     console.error('\n❌ 전체 오류: ' + err.message);
