@@ -36,6 +36,27 @@ initDatabase();
       `ALTER TABLE tiktok_searches ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'manual'`
     ).catch(() => {});
     console.log('✅ tiktok_tasks table ready');
+
+    // AI 채팅 이력 테이블
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tiktok_ai_chats (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(200),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tiktok_ai_messages (
+        id SERIAL PRIMARY KEY,
+        chat_id INTEGER REFERENCES tiktok_ai_chats(id) ON DELETE CASCADE,
+        role VARCHAR(20) NOT NULL,
+        content TEXT NOT NULL,
+        queries_used JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log('✅ tiktok_ai_chats tables ready');
   } catch (err) {
     console.error('Task table init error:', err.message);
   }
@@ -1074,7 +1095,7 @@ const dataQueries = {
 
 router.post('/ai-chat', async (req, res) => {
   try {
-    const { question } = req.body;
+    const { question, chatId } = req.body;
 
     if (!question) {
       return res.status(400).json({ success: false, error: '질문을 입력해주세요' });
@@ -1196,11 +1217,88 @@ ${contextData}
     const step2Result = await model.generateContent(step2Prompt);
     const answer = step2Result.response.text();
 
+    // DB에 대화 저장
+    let activeChatId = chatId;
+    try {
+      if (!activeChatId) {
+        // 새 채팅 생성 (제목은 질문 앞 30자)
+        const newChat = await pool.query(
+          `INSERT INTO tiktok_ai_chats (title) VALUES ($1) RETURNING id`,
+          [question.substring(0, 60)]
+        );
+        activeChatId = newChat.rows[0].id;
+      } else {
+        await pool.query(`UPDATE tiktok_ai_chats SET updated_at = NOW() WHERE id = $1`, [activeChatId]);
+      }
+      // 질문 저장
+      await pool.query(
+        `INSERT INTO tiktok_ai_messages (chat_id, role, content) VALUES ($1, 'user', $2)`,
+        [activeChatId, question]
+      );
+      // 답변 저장
+      await pool.query(
+        `INSERT INTO tiktok_ai_messages (chat_id, role, content, queries_used) VALUES ($1, 'assistant', $2, $3)`,
+        [activeChatId, answer, JSON.stringify(queryPlan.queries?.map(q => q.function) || [])]
+      );
+    } catch (saveErr) {
+      console.error('채팅 저장 실패:', saveErr.message);
+    }
+
     console.log('✅ AI Chat 완료');
-    res.json({ success: true, data: { answer, queriesUsed: queryPlan.queries?.map(q => q.function) } });
+    res.json({ success: true, data: { answer, chatId: activeChatId, queriesUsed: queryPlan.queries?.map(q => q.function) } });
   } catch (err) {
     console.error('AI Chat error:', err.message);
     res.status(500).json({ success: false, error: 'AI 분석 실패: ' + err.message });
+  }
+});
+
+// ============================================================
+// AI CHAT HISTORY API
+// ============================================================
+
+// GET /api/tiktok/ai-chats - 채팅 이력 목록
+router.get('/ai-chats', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    const result = await pool.query(
+      `SELECT c.*, 
+        (SELECT COUNT(*) FROM tiktok_ai_messages WHERE chat_id = c.id) as message_count
+       FROM tiktok_ai_chats c
+       ORDER BY c.updated_at DESC LIMIT $1`,
+      [limit]
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/tiktok/ai-chats/:id - 특정 채팅 메시지 조회
+router.get('/ai-chats/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const chat = await pool.query(`SELECT * FROM tiktok_ai_chats WHERE id = $1`, [id]);
+    if (chat.rows.length === 0) {
+      return res.status(404).json({ success: false, error: '채팅을 찾을 수 없습니다' });
+    }
+    const messages = await pool.query(
+      `SELECT role, content, created_at FROM tiktok_ai_messages WHERE chat_id = $1 ORDER BY created_at ASC`,
+      [id]
+    );
+    res.json({ success: true, data: { chat: chat.rows[0], messages: messages.rows } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/tiktok/ai-chats/:id - 채팅 삭제
+router.delete('/ai-chats/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM tiktok_ai_chats WHERE id = $1', [id]);
+    res.json({ success: true, message: '삭제되었습니다' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
