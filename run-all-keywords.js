@@ -256,14 +256,24 @@ async function checkAndLogin(browser) {
   }
 }
 
-// 이전 검색 결과와 비교 분석
+// 이전 검색 결과와 비교 분석 (전일 마지막 데이터 기준)
 async function analyzeChanges(keyword, currentVideos, searchId) {
   try {
+    // 현재 검색의 날짜(KST) 구하기
+    const currentSearch = await pool.query(
+      `SELECT TO_CHAR(COALESCE(completed_at, NOW()) AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as today
+       FROM tiktok_searches WHERE id = $1`,
+      [searchId]
+    );
+    const today = currentSearch.rows.length > 0 ? currentSearch.rows[0].today : null;
+
+    // 전일(KST 기준)의 마지막 완료 검색과 비교
     const prevSearch = await pool.query(
       `SELECT id FROM tiktok_searches 
-       WHERE keyword = $1 AND status = 'completed' AND id < $2
-       ORDER BY id DESC LIMIT 1`,
-      [keyword, searchId]
+       WHERE keyword = $1 AND status = 'completed' AND video_count > 0
+         AND TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') < $2
+       ORDER BY completed_at DESC LIMIT 1`,
+      [keyword, today || new Date().toISOString().split('T')[0]]
     );
 
     if (prevSearch.rows.length === 0) {
