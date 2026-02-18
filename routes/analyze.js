@@ -891,7 +891,7 @@ const dataQueries = {
        ORDER BY d DESC LIMIT $2`,
       [keyword, days]
     );
-    let result = '';
+    let result = `[키워드: ${keyword}]\n`;
     for (const row of dates.rows) {
       const search = await pool.query(
         `SELECT s.id, TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI') as time_kst
@@ -905,10 +905,13 @@ const dataQueries = {
           `SELECT rank, creator_name, creator_id, description, views, likes, comments, shares, video_url
            FROM tiktok_videos WHERE search_id = $1 ORDER BY rank`, [search.rows[0].id]
         );
-        result += `\n== ${row.d} (${search.rows[0].time_kst}) - ${videos.rows.length}개 영상 ==\n`;
+        result += `\n===== ${row.d} (수집: ${search.rows[0].time_kst}) | ${videos.rows.length}개 영상 =====\n`;
+        result += `순위 | 크리에이터ID | 크리에이터명 | 조회수 | 좋아요 | 댓글 | 공유 | 설명 | URL\n`;
+        result += `--- | --- | --- | --- | --- | --- | --- | --- | ---\n`;
         videos.rows.forEach(v => {
-          result += `#${v.rank} @${v.creator_id}(${v.creator_name}) | 조회:${v.views} 좋아요:${v.likes} 댓글:${v.comments} 공유:${v.shares} | ${(v.description||'').substring(0,80)}\n`;
+          result += `${v.rank} | ${v.creator_id} | ${v.creator_name} | ${v.views} | ${v.likes} | ${v.comments} | ${v.shares} | ${(v.description||'').substring(0,60)} | ${v.video_url}\n`;
         });
+        result += `===== ${row.d} 끝 =====\n`;
       }
     }
     return result || `"${keyword}" 데이터 없음`;
@@ -961,14 +964,15 @@ const dataQueries = {
        ORDER BY keyword, s.completed_at DESC`,
       [date]
     );
-    let result = `${date} 전체 현황 (${searches.rows.length}개 키워드):\n`;
+    let result = `[${date} 전체 현황] ${searches.rows.length}개 키워드\n`;
     for (const s of searches.rows) {
       const top5 = await pool.query(
-        `SELECT rank, creator_name, views, likes FROM tiktok_videos WHERE search_id = $1 ORDER BY rank LIMIT 5`, [s.id]
+        `SELECT rank, creator_name, creator_id, views, likes FROM tiktok_videos WHERE search_id = $1 ORDER BY rank LIMIT 5`, [s.id]
       );
-      result += `\n[${s.keyword}] ${s.video_count}개 (${s.time_kst})\n`;
+      result += `\n--- ${s.keyword} (${s.video_count}개, ${s.time_kst}) ---\n`;
+      result += `순위 | 크리에이터ID | 크리에이터명 | 조회수 | 좋아요\n`;
       top5.rows.forEach(v => {
-        result += `  #${v.rank} ${v.creator_name} 조회:${v.views} 좋아요:${v.likes}\n`;
+        result += `${v.rank} | ${v.creator_id} | ${v.creator_name} | ${v.views} | ${v.likes}\n`;
       });
     }
     return result;
@@ -996,7 +1000,6 @@ const dataQueries = {
   async top_creators(params) {
     const { metric = 'likes', limit = 15 } = params;
     const orderCol = metric === 'views' ? 'views' : 'likes';
-    // 최근 수집 기준
     const result = await pool.query(
       `WITH latest AS (
         SELECT DISTINCT ON (keyword) id, keyword
@@ -1009,9 +1012,12 @@ const dataQueries = {
       LIMIT $1`,
       [limit]
     );
-    return `전체 TOP ${metric} 크리에이터:\n` + result.rows.map((r, i) => 
-      `${i+1}. @${r.creator_id}(${r.creator_name}) [${r.keyword} #${r.rank}] 조회:${r.views} 좋아요:${r.likes}`
-    ).join('\n');
+    let out = `[전체 TOP ${metric}] ${result.rows.length}개\n`;
+    out += `순위 | 크리에이터ID | 크리에이터명 | 키워드 | 검색순위 | 조회수 | 좋아요 | 댓글\n`;
+    result.rows.forEach((r, i) => {
+      out += `${i+1} | ${r.creator_id} | ${r.creator_name} | ${r.keyword} | ${r.rank} | ${r.views} | ${r.likes} | ${r.comments}\n`;
+    });
+    return out;
   },
 
   // 7. 여러 키워드 비교
@@ -1026,10 +1032,13 @@ const dataQueries = {
       );
       if (search.rows.length > 0) {
         const top5 = await pool.query(
-          `SELECT rank, creator_name, views, likes FROM tiktok_videos WHERE search_id = $1 ORDER BY rank LIMIT 5`, [search.rows[0].id]
+          `SELECT rank, creator_name, creator_id, views, likes FROM tiktok_videos WHERE search_id = $1 ORDER BY rank LIMIT 5`, [search.rows[0].id]
         );
-        result += `\n[${kw}] (${search.rows[0].time_kst})\n`;
-        top5.rows.forEach(v => { result += `  #${v.rank} ${v.creator_name} 조회:${v.views} 좋아요:${v.likes}\n`; });
+        result += `\n--- ${kw} (${search.rows[0].time_kst}) ---\n`;
+        result += `순위 | 크리에이터ID | 크리에이터명 | 조회수 | 좋아요\n`;
+        top5.rows.forEach(v => {
+          result += `${v.rank} | ${v.creator_id} | ${v.creator_name} | ${v.views} | ${v.likes}\n`;
+        });
       }
     }
     return result || '해당 키워드 데이터 없음';
@@ -1160,29 +1169,29 @@ ${keywordList}
     console.log('🤖 [AI Chat 2단계] 답변 생성...');
     const step2Prompt = `당신은 TikTok 뷰티/스킨케어 마케팅 데이터 분석 전문가입니다.
 아래는 데이터베이스에서 조회한 실제 TikTok 영상 랭킹 데이터입니다.
+데이터는 테이블 형식(| 구분자)으로 제공됩니다. 각 날짜별로 "===== 날짜 =====" 구분선으로 분리되어 있습니다.
+같은 영상은 동일한 URL을 가집니다. 다른 날짜에 같은 URL이 있으면 같은 영상이며 비교가 가능합니다.
 
 ${contextData}
 
 사용자 질문: ${question}
 
 ## 절대 규칙 (위반 시 분석 무효)
-1. **수치 정확성**: 위 데이터에 나온 숫자를 절대 변형하지 마세요. 조회수 "573200"을 "573,200"으로 표기하는 것은 OK, "5,732,000"이나 "19,900,000"으로 바꾸는 것은 금지입니다.
-2. **없는 데이터 금지**: 위 데이터에 없는 영상, 크리에이터, 수치를 만들어내지 마세요. 데이터에 없으면 "해당 데이터 없음"이라고 명시하세요.
-3. **비교 시 동일 URL 기준**: 두 날짜의 데이터를 비교할 때는 video_url이 같은 영상끼리만 비교하세요. 한쪽에만 있는 영상은 "신규 진입" 또는 "이탈"로 표시하세요.
-4. **순위 = rank 값**: "인기 있는 영상"을 판단할 때 조회수/좋아요 수치를 기준으로 하세요. rank는 TikTok 검색 결과 순서입니다.
+1. **수치 정확성**: 위 테이블의 숫자를 절대 변형하지 마세요. "573200"은 "573,200"으로만 표기 가능. 자릿수를 바꾸거나 다른 숫자로 대체 금지.
+2. **없는 데이터 금지**: 위 테이블에 없는 영상, 크리에이터, 수치를 절대 만들어내지 마세요. 특정 날짜 테이블에 해당 크리에이터/URL이 없으면 "해당 날짜에 데이터 없음"이라고 명시하세요.
+3. **비교 시 URL 기준**: 두 날짜를 비교할 때 반드시 같은 URL의 영상끼리만 비교하세요. 한쪽 테이블에만 있는 영상은 "신규 진입" 또는 "이탈"로 표시하세요.
+4. **조회수 기준 정렬**: "인기 있는 영상"을 선정할 때는 조회수 컬럼의 수치를 기준으로 정렬하세요.
 
 ## 답변 형식
-- 데이터 인용 시 반드시 원본 수치를 그대로 사용: "조회수 12,400,000 / 좋아요 586,300"
-- 크리에이터는 데이터에 있는 이름 그대로 사용 (임의로 @아이디를 추측하지 말 것)
-- 변화량 계산: (오늘값 - 전일값)을 직접 계산하고, 계산 과정을 보여주세요
+- 영상 인용 시: 크리에이터명(크리에이터ID) - 조회수: X / 좋아요: Y (테이블 원본 수치 그대로)
+- 변화량 계산: (오늘값 - 전일값) 산술식을 보여주세요. 예: "좋아요 +200 (733,100 - 732,900)"
 - 한국어로 간결하고 명확하게 답변하세요
-- 마케팅 인사이트나 트렌드 발견 시 "인사이트" 섹션에 정리
+- 마케팅 인사이트 발견 시 별도 정리
 
-## 자기 검증
-답변 완료 전에 스스로 확인하세요:
-- 내가 언급한 모든 수치가 위 데이터에 실제로 있는가?
-- 내가 언급한 크리에이터가 위 데이터에 실제로 있는가?
-- 비교 수치를 계산했다면 산술이 맞는가?`;
+## 자기 검증 (답변 전 반드시 확인)
+- 내가 언급한 모든 수치가 위 테이블에서 찾을 수 있는가?
+- 특정 날짜 데이터를 인용했다면, 해당 날짜 테이블에 실제로 그 행이 있는가?
+- 비교한 두 영상의 URL이 동일한가?`;
 
     const step2Result = await model.generateContent(step2Prompt);
     const answer = step2Result.response.text();
