@@ -509,7 +509,7 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
 
     // 당일 마지막 수집
     const todaySearch = await pool.query(
-      `SELECT s.id FROM tiktok_searches s
+      `SELECT s.id, TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI') as completed_kst FROM tiktok_searches s
        WHERE status = 'completed'
          AND s.keyword = $1
          AND TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $2
@@ -524,7 +524,7 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
     const prevDateStr = prevDate.toISOString().split('T')[0];
 
     const prevSearch = await pool.query(
-      `SELECT s.id FROM tiktok_searches s
+      `SELECT s.id, TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI') as completed_kst FROM tiktok_searches s
        WHERE status = 'completed'
          AND s.keyword = $1
          AND TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $2
@@ -673,6 +673,8 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
         keyword,
         date,
         previous_date: prevDateStr,
+        today_time: todaySearch.rows[0]?.completed_kst || null,
+        prev_time: prevSearch.rows.length > 0 ? prevSearch.rows[0].completed_kst : null,
         today_count: todayList.length,
         prev_count: prevList.length,
         new_entries: comparison.filter(v => v.is_new).length,
@@ -690,6 +692,27 @@ router.get('/daily-reports/:date/compare/:keyword', async (req, res) => {
 // ============================================================
 // DATA ANALYTICS API - 정형 분석
 // ============================================================
+
+// GET /api/tiktok/analytics/dates/:keyword - 키워드별 수집 날짜 목록
+// ⚠️ 이 라우트가 /analytics/:keyword/:date 보다 먼저 와야 함
+router.get('/analytics/dates/:keyword', async (req, res) => {
+  try {
+    const { keyword } = req.params;
+    const result = await pool.query(
+      `SELECT TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as date,
+        COUNT(*) as search_count,
+        SUM(video_count) as total_videos
+       FROM tiktok_searches
+       WHERE keyword = $1 AND status = 'completed' AND video_count > 0
+       GROUP BY TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')
+       ORDER BY date DESC LIMIT 30`,
+      [keyword]
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // GET /api/tiktok/analytics/:keyword/:date - 키워드별 당일 전체 수집 데이터 분석
 router.get('/analytics/:keyword/:date', async (req, res) => {
@@ -940,28 +963,6 @@ ${contextData}
   } catch (err) {
     console.error('AI Chat error:', err.message);
     res.status(500).json({ success: false, error: 'AI 분석 실패: ' + err.message });
-  }
-});
-
-// ============================================================
-// GET /api/tiktok/analytics/dates/:keyword - 키워드별 수집 날짜 목록
-// ============================================================
-router.get('/analytics/dates/:keyword', async (req, res) => {
-  try {
-    const { keyword } = req.params;
-    const result = await pool.query(
-      `SELECT TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as date,
-        COUNT(*) as search_count,
-        SUM(video_count) as total_videos
-       FROM tiktok_searches
-       WHERE keyword = $1 AND status = 'completed' AND video_count > 0
-       GROUP BY TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')
-       ORDER BY date DESC LIMIT 30`,
-      [keyword]
-    );
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
   }
 });
 
