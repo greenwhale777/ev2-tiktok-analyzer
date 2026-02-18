@@ -877,12 +877,195 @@ router.get('/analytics/:keyword/:date', async (req, res) => {
 });
 
 // ============================================================
-// AI CHAT ANALYSIS API - Gemini 기반 자연어 분석
+// AI CHAT ANALYSIS API - Gemini 2단계 호출 (쿼리 판단 → 데이터 조회 → 답변)
 // ============================================================
+
+// 사용 가능한 데이터 쿼리 함수들
+const dataQueries = {
+  // 1. 특정 키워드 최근 데이터 (최대 2일)
+  async keyword_recent(params) {
+    const { keyword, days = 2 } = params;
+    const dates = await pool.query(
+      `SELECT DISTINCT TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as d
+       FROM tiktok_searches WHERE keyword = $1 AND status = 'completed' AND video_count > 0
+       ORDER BY d DESC LIMIT $2`,
+      [keyword, days]
+    );
+    let result = '';
+    for (const row of dates.rows) {
+      const search = await pool.query(
+        `SELECT s.id, TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI') as time_kst
+         FROM tiktok_searches s WHERE s.keyword = $1 AND status = 'completed' AND video_count > 0
+           AND TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $2
+         ORDER BY s.completed_at DESC LIMIT 1`,
+        [keyword, row.d]
+      );
+      if (search.rows.length > 0) {
+        const videos = await pool.query(
+          `SELECT rank, creator_name, creator_id, description, views, likes, comments, shares, video_url
+           FROM tiktok_videos WHERE search_id = $1 ORDER BY rank`, [search.rows[0].id]
+        );
+        result += `\n== ${row.d} (${search.rows[0].time_kst}) - ${videos.rows.length}개 영상 ==\n`;
+        videos.rows.forEach(v => {
+          result += `#${v.rank} @${v.creator_id}(${v.creator_name}) | 조회:${v.views} 좋아요:${v.likes} 댓글:${v.comments} 공유:${v.shares} | ${(v.description||'').substring(0,80)}\n`;
+        });
+      }
+    }
+    return result || `"${keyword}" 데이터 없음`;
+  },
+
+  // 2. 전체 키워드 최근 현황
+  async all_keywords_summary() {
+    const result = await pool.query(
+      `SELECT DISTINCT ON (keyword) keyword, video_count,
+        TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI') as time_kst
+       FROM tiktok_searches WHERE status = 'completed' AND video_count > 0
+       ORDER BY keyword, completed_at DESC`
+    );
+    return '전체 키워드 현황:\n' + result.rows.map(s => `- ${s.keyword}: ${s.video_count}개 (${s.time_kst})`).join('\n');
+  },
+
+  // 3. 크로스 키워드 크리에이터 분석
+  async cross_keyword_creators() {
+    const result = await pool.query(
+      `WITH latest AS (
+        SELECT DISTINCT ON (keyword) id, keyword
+        FROM tiktok_searches WHERE status = 'completed' AND video_count > 0
+        ORDER BY keyword, completed_at DESC
+      )
+      SELECT v.creator_id, v.creator_name, 
+        ARRAY_AGG(DISTINCT l.keyword) as keywords,
+        COUNT(*) as total_appearances,
+        ARRAY_AGG(v.rank ORDER BY l.keyword) as ranks
+      FROM tiktok_videos v JOIN latest l ON v.search_id = l.id
+      WHERE v.creator_id IS NOT NULL AND v.creator_id != ''
+      GROUP BY v.creator_id, v.creator_name
+      HAVING COUNT(DISTINCT l.keyword) >= 2
+      ORDER BY COUNT(DISTINCT l.keyword) DESC, COUNT(*) DESC
+      LIMIT 20`
+    );
+    if (result.rows.length === 0) return '여러 키워드에 걸쳐 등장하는 크리에이터 없음';
+    return '크로스 키워드 크리에이터:\n' + result.rows.map(r => 
+      `@${r.creator_id}(${r.creator_name}) - ${r.keywords.join(', ')} (총 ${r.total_appearances}회)`
+    ).join('\n');
+  },
+
+  // 4. 특정 날짜 전체 키워드 데이터
+  async date_all_keywords(params) {
+    const { date } = params;
+    const searches = await pool.query(
+      `SELECT DISTINCT ON (keyword) s.id, s.keyword, s.video_count,
+        TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') as time_kst
+       FROM tiktok_searches s WHERE status = 'completed' AND video_count > 0
+         AND TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $1
+       ORDER BY keyword, s.completed_at DESC`,
+      [date]
+    );
+    let result = `${date} 전체 현황 (${searches.rows.length}개 키워드):\n`;
+    for (const s of searches.rows) {
+      const top5 = await pool.query(
+        `SELECT rank, creator_name, views, likes FROM tiktok_videos WHERE search_id = $1 ORDER BY rank LIMIT 5`, [s.id]
+      );
+      result += `\n[${s.keyword}] ${s.video_count}개 (${s.time_kst})\n`;
+      top5.rows.forEach(v => {
+        result += `  #${v.rank} ${v.creator_name} 조회:${v.views} 좋아요:${v.likes}\n`;
+      });
+    }
+    return result;
+  },
+
+  // 5. 키워드 시계열 추이 (최근 7일)
+  async keyword_trend(params) {
+    const { keyword, days = 7 } = params;
+    const result = await pool.query(
+      `SELECT TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as date,
+        s.video_count,
+        (SELECT string_agg(creator_name, ', ' ORDER BY rank) FROM tiktok_videos WHERE search_id = s.id AND rank <= 3) as top3
+       FROM tiktok_searches s
+       WHERE s.keyword = $1 AND status = 'completed' AND video_count > 0
+       ORDER BY s.completed_at DESC LIMIT $2`,
+      [keyword, days]
+    );
+    if (result.rows.length === 0) return `"${keyword}" 시계열 데이터 없음`;
+    return `"${keyword}" 최근 추이:\n` + result.rows.map(r => 
+      `${r.date}: ${r.video_count}개 수집 | TOP3: ${r.top3 || '-'}`
+    ).join('\n');
+  },
+
+  // 6. 전체 TOP 크리에이터 (좋아요/조회수 기준)
+  async top_creators(params) {
+    const { metric = 'likes', limit = 15 } = params;
+    const orderCol = metric === 'views' ? 'views' : 'likes';
+    // 최근 수집 기준
+    const result = await pool.query(
+      `WITH latest AS (
+        SELECT DISTINCT ON (keyword) id, keyword
+        FROM tiktok_searches WHERE status = 'completed' AND video_count > 0
+        ORDER BY keyword, completed_at DESC
+      )
+      SELECT v.creator_name, v.creator_id, l.keyword, v.rank, v.views, v.likes, v.comments
+      FROM tiktok_videos v JOIN latest l ON v.search_id = l.id
+      ORDER BY CAST(NULLIF(REPLACE(v.${orderCol}, ',', ''), 'N/A') AS BIGINT) DESC NULLS LAST
+      LIMIT $1`,
+      [limit]
+    );
+    return `전체 TOP ${metric} 크리에이터:\n` + result.rows.map((r, i) => 
+      `${i+1}. @${r.creator_id}(${r.creator_name}) [${r.keyword} #${r.rank}] 조회:${r.views} 좋아요:${r.likes}`
+    ).join('\n');
+  },
+
+  // 7. 여러 키워드 비교
+  async compare_keywords(params) {
+    const { keywords } = params;
+    let result = '';
+    for (const kw of keywords) {
+      const search = await pool.query(
+        `SELECT s.id, s.video_count, TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI') as time_kst
+         FROM tiktok_searches s WHERE s.keyword = $1 AND status = 'completed' AND video_count > 0
+         ORDER BY s.completed_at DESC LIMIT 1`, [kw]
+      );
+      if (search.rows.length > 0) {
+        const top5 = await pool.query(
+          `SELECT rank, creator_name, views, likes FROM tiktok_videos WHERE search_id = $1 ORDER BY rank LIMIT 5`, [search.rows[0].id]
+        );
+        result += `\n[${kw}] (${search.rows[0].time_kst})\n`;
+        top5.rows.forEach(v => { result += `  #${v.rank} ${v.creator_name} 조회:${v.views} 좋아요:${v.likes}\n`; });
+      }
+    }
+    return result || '해당 키워드 데이터 없음';
+  },
+
+  // 8. 수집 가능한 키워드 목록
+  async available_keywords() {
+    const result = await pool.query(
+      `SELECT keyword, is_active FROM tiktok_keywords ORDER BY created_at DESC`
+    );
+    return '등록된 키워드:\n' + result.rows.map(r => `- ${r.keyword} (${r.is_active ? '활성' : '비활성'})`).join('\n');
+  },
+
+  // 9. 수집 가능한 날짜 목록
+  async available_dates(params) {
+    const { keyword } = params;
+    let q, p;
+    if (keyword) {
+      q = `SELECT TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as d, COUNT(*) as cnt
+           FROM tiktok_searches WHERE keyword = $1 AND status = 'completed' AND video_count > 0
+           GROUP BY d ORDER BY d DESC LIMIT 14`;
+      p = [keyword];
+    } else {
+      q = `SELECT TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') as d, COUNT(*) as cnt, COUNT(DISTINCT keyword) as kw_cnt
+           FROM tiktok_searches WHERE status = 'completed' AND video_count > 0
+           GROUP BY d ORDER BY d DESC LIMIT 14`;
+      p = [];
+    }
+    const result = await pool.query(q, p);
+    return '수집된 날짜:\n' + result.rows.map(r => `- ${r.d}: ${r.cnt}회 수집${r.kw_cnt ? ` (${r.kw_cnt}개 키워드)` : ''}`).join('\n');
+  }
+};
 
 router.post('/ai-chat', async (req, res) => {
   try {
-    const { question, keyword, date } = req.body;
+    const { question } = req.body;
 
     if (!question) {
       return res.status(400).json({ success: false, error: '질문을 입력해주세요' });
@@ -893,73 +1076,108 @@ router.post('/ai-chat', async (req, res) => {
       return res.status(500).json({ success: false, error: 'GEMINI_API_KEY가 설정되지 않았습니다' });
     }
 
-    // 데이터 수집 - keyword/date가 있으면 해당 데이터, 없으면 최근 전체
-    let contextData = '';
-
-    if (keyword && date) {
-      // 특정 키워드+날짜
-      const searches = await pool.query(
-        `SELECT s.id, s.keyword, s.video_count, 
-          TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') as time_kst
-         FROM tiktok_searches s
-         WHERE s.keyword = $1 AND status = 'completed' AND video_count > 0
-           AND TO_CHAR(s.completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') = $2
-         ORDER BY s.completed_at DESC LIMIT 1`,
-        [keyword, date]
-      );
-
-      if (searches.rows.length > 0) {
-        const videos = await pool.query(
-          `SELECT rank, creator_name, creator_id, description, views, likes, comments, bookmarks, shares, video_url
-           FROM tiktok_videos WHERE search_id = $1 ORDER BY rank`,
-          [searches.rows[0].id]
-        );
-        contextData = `키워드: ${keyword}, 날짜: ${date}, 수집시간: ${searches.rows[0].time_kst}\n`;
-        contextData += `영상 ${videos.rows.length}개:\n`;
-        videos.rows.forEach(v => {
-          contextData += `#${v.rank} @${v.creator_id} | 조회:${v.views} 좋아요:${v.likes} 댓글:${v.comments} 공유:${v.shares} | ${(v.description || '').substring(0, 60)}\n`;
-        });
-      }
-    } else {
-      // 최근 수집 데이터 요약 (최근 5개 키워드)
-      const recentSearches = await pool.query(
-        `SELECT DISTINCT ON (keyword) keyword, video_count,
-          TO_CHAR(completed_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD HH24:MI') as time_kst
-         FROM tiktok_searches
-         WHERE status = 'completed' AND video_count > 0
-         ORDER BY keyword, completed_at DESC
-         LIMIT 20`
-      );
-      contextData = '최근 수집 현황:\n';
-      recentSearches.rows.forEach(s => {
-        contextData += `- ${s.keyword}: ${s.video_count}개 (${s.time_kst})\n`;
-      });
-    }
-
-    // Gemini API 호출
     const { GoogleGenerativeAI } = require('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
 
-    const prompt = `당신은 TikTok 뷰티/스킨케어 마케팅 데이터 분석 전문가입니다.
-아래는 TikTok에서 수집한 영상 랭킹 데이터입니다.
+    // 등록된 키워드 목록 가져오기
+    const kwList = await pool.query(`SELECT keyword FROM tiktok_keywords WHERE is_active = true ORDER BY keyword`);
+    const keywordList = kwList.rows.map(r => r.keyword).join(', ');
+
+    // 1단계: 질문 분석 → 필요한 쿼리 결정
+    const step1Prompt = `당신은 TikTok 데이터 분석 시스템의 쿼리 플래너입니다.
+사용자의 질문을 분석하고, 답변에 필요한 데이터 쿼리를 결정해주세요.
+
+## 사용 가능한 키워드 목록
+${keywordList}
+
+## 사용 가능한 쿼리 함수
+1. keyword_recent(keyword, days) - 특정 키워드의 최근 N일 영상 데이터 (순위, 크리에이터, 조회수, 좋아요 등)
+2. all_keywords_summary() - 전체 키워드 최근 수집 현황 요약
+3. cross_keyword_creators() - 여러 키워드에 걸쳐 등장하는 크리에이터 분석
+4. date_all_keywords(date) - 특정 날짜의 전체 키워드 데이터 (TOP5씩)
+5. keyword_trend(keyword, days) - 키워드의 시계열 추이 (최근 N일)
+6. top_creators(metric, limit) - 전체 키워드 통합 TOP 크리에이터 (metric: likes 또는 views)
+7. compare_keywords(keywords[]) - 여러 키워드 TOP5 비교
+8. available_keywords() - 등록된 키워드 목록
+9. available_dates(keyword?) - 수집된 날짜 목록
+
+## 규칙
+- 최대 3개 쿼리까지 선택 가능
+- 질문에 가장 적합한 쿼리를 선택
+- 키워드명이 질문에 포함되면 해당 키워드 사용
+- "전체", "모든 키워드" → all_keywords_summary 또는 date_all_keywords
+- "크리에이터 분석", "누가 여러 키워드에" → cross_keyword_creators
+- "추이", "변화", "트렌드" → keyword_trend
+- "비교" → compare_keywords
+- 오늘 날짜: ${new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })}
+
+사용자 질문: ${question}
+
+다음 JSON 형식으로만 응답하세요:
+{
+  "queries": [
+    {"function": "함수명", "params": {"키": "값"}}
+  ],
+  "reasoning": "이 쿼리를 선택한 이유 (한 줄)"
+}`;
+
+    console.log('🤖 [AI Chat 1단계] 쿼리 플래닝...');
+    const step1Result = await model.generateContent(step1Prompt);
+    const step1Text = step1Result.response.text();
+    
+    let queryPlan;
+    try {
+      const jsonMatch = step1Text.match(/```json\n?([\s\S]*?)\n?```/) || step1Text.match(/\{[\s\S]*\}/);
+      queryPlan = JSON.parse(jsonMatch[1] || jsonMatch[0]);
+    } catch (e) {
+      console.error('쿼리 플랜 파싱 실패:', step1Text);
+      queryPlan = { queries: [{ function: 'all_keywords_summary', params: {} }] };
+    }
+
+    console.log('📋 쿼리 플랜:', JSON.stringify(queryPlan.queries));
+
+    // 2단계: 데이터 조회
+    let contextData = '';
+    for (const q of (queryPlan.queries || []).slice(0, 3)) {
+      const fn = dataQueries[q.function];
+      if (fn) {
+        try {
+          const data = await fn(q.params || {});
+          contextData += data + '\n\n';
+        } catch (e) {
+          console.error(`쿼리 실행 실패 (${q.function}):`, e.message);
+          contextData += `[${q.function} 실행 실패]\n\n`;
+        }
+      }
+    }
+
+    if (!contextData.trim()) {
+      contextData = '데이터를 조회할 수 없습니다.';
+    }
+
+    // 3단계: 최종 답변 생성
+    console.log('🤖 [AI Chat 2단계] 답변 생성...');
+    const step2Prompt = `당신은 TikTok 뷰티/스킨케어 마케팅 데이터 분석 전문가입니다.
+아래는 데이터베이스에서 조회한 실제 TikTok 영상 랭킹 데이터입니다.
 
 ${contextData}
 
 사용자 질문: ${question}
 
 답변 가이드라인:
-- 데이터에 기반한 구체적인 답변을 해주세요
-- 영상 순위, 크리에이터, 조회수/좋아요 등 수치를 활용하세요
-- 마케팅 인사이트나 트렌드를 발견하면 언급해주세요
+- 위 데이터에 기반한 구체적인 답변을 해주세요
+- 영상 순위, 크리에이터명(@아이디), 조회수/좋아요 수치를 구체적으로 언급해주세요
+- 2일 이상의 데이터가 있으면 같은 video_url 기준으로 변화량 비교 가능
+- 마케팅 인사이트나 트렌드 발견 시 언급해주세요
 - 한국어로 간결하고 명확하게 답변하세요
-- 데이터가 없는 경우 솔직하게 말해주세요`;
+- 데이터에 없는 내용은 추측하지 말고 솔직하게 말해주세요`;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const answer = response.text();
+    const step2Result = await model.generateContent(step2Prompt);
+    const answer = step2Result.response.text();
 
-    res.json({ success: true, data: { answer, keyword, date } });
+    console.log('✅ AI Chat 완료');
+    res.json({ success: true, data: { answer, queriesUsed: queryPlan.queries?.map(q => q.function) } });
   } catch (err) {
     console.error('AI Chat error:', err.message);
     res.status(500).json({ success: false, error: 'AI 분석 실패: ' + err.message });
