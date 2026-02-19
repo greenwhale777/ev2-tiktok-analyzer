@@ -538,7 +538,7 @@ async function run() {
     const totalTimeStr = formatTime(totalSeconds);
     const successCount = results.filter(function(r) { return r.status === 'success'; }).length;
     const failCount = results.filter(function(r) { return r.status === 'failed'; }).length;
-    const incompleteResults = results.filter(function(r) { return r.status === 'success' && r.count < topN; });
+    const incompleteResults = results.filter(function(r) { return (r.status === 'success' && r.count < topN) || r.status === 'failed'; });
 
     console.log('\n' + '='.repeat(60));
     console.log('📊 1차 실행 결과');
