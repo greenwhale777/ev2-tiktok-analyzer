@@ -152,6 +152,7 @@ class TikTokScraper {
           '--metrics-recording-only',
           '--disable-popup-blocking',
           '--enable-unsafe-swiftshader',
+          '--disable-sync',
         ],
         args: [
           '--disable-blink-features=AutomationControlled',
@@ -323,10 +324,18 @@ class TikTokScraper {
         console.log('📜 Scrolling to load more results...');
         // 페이지 클릭하여 포커스 부여
         await page.mouse.click(960, 500);
-        await this.randomDelay(500, 1000);
+        await this.randomDelay(800, 1500);
+        // 2~3번째 스크롤 중 랜덤으로 한 번만 위로 살짝 올리기
+        const scrollUpAt = Math.random() < 0.5 ? 1 : 2;
         for (let i = 0; i < 10; i++) {
+          if (i === scrollUpAt) {
+            await page.evaluate(() => window.scrollBy(0, -300));
+            await this.randomDelay(800, 1500);
+            await page.evaluate(() => window.scrollBy(0, 500));
+            await this.randomDelay(1000, 2000);
+          }
           await page.keyboard.press('End');
-          await this.randomDelay(2000, 3000);
+          await this.randomDelay(2500, 4500);
           const count = await page.evaluate(() => document.querySelectorAll('a[href*="/video/"]').length);
           console.log(`   스크롤 ${i + 1}/10 - 현재 ${count}개`);
           if (count >= topN) break;
