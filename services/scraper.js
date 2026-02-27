@@ -1,4 +1,5 @@
 const { chromium } = require('playwright');
+const { execSync, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -134,16 +135,37 @@ class TikTokScraper {
    * 브라우저 초기화 (일반 Chrome 사용으로 캡차 우회)
    */
   async initBrowser() {
-    // 크롬 프로필 잠금 해제 (이전 세션이 비정상 종료된 경우)
     const profilePath = 'C:\\EV-System\\chrome-tiktok-profile-real';
-    const lockFile = path.join(profilePath, 'SingletonLock');
+
+    // 1단계: 스크래핑 프로필 Chrome 프로세스만 종료
     try {
-      if (fs.existsSync(lockFile)) {
-        fs.unlinkSync(lockFile);
-        console.log('🔓 SingletonLock 삭제 완료 - 프로필 잠금 해제');
+      console.log('🔄 스크래핑 프로필 Chrome 정리...');
+      execSync('powershell -Command "Get-WmiObject Win32_Process -Filter \\"name=\'chrome.exe\'\\" | Where-Object { $_.CommandLine -match \'chrome-tiktok-profile-real\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"', { stdio: 'ignore', timeout: 10000 });
+      console.log('   ✅ 스크래핑 프로필 Chrome 종료');
+    } catch (e) {
+      console.log('   ℹ️ 스크래핑 프로필 Chrome 미실행');
+    }
+
+    // 3초 대기 (프로세스 완전 종료)
+    await new Promise(r => setTimeout(r, 3000));
+
+    // 2단계: Lock 파일 삭제
+    ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].forEach(f => {
+      try { fs.unlinkSync(path.join(profilePath, f)); } catch (e) {}
+    });
+    console.log('   🔓 Lock 파일 정리 완료');
+
+    // 3단계: exit_type을 Normal로 변경 (복구 팝업 방지)
+    const prefsPath = path.join(profilePath, 'Default', 'Preferences');
+    try {
+      if (fs.existsSync(prefsPath)) {
+        let prefs = fs.readFileSync(prefsPath, 'utf8');
+        prefs = prefs.replace(/"exit_type"\s*:\s*"[^"]*"/, '"exit_type":"Normal"');
+        fs.writeFileSync(prefsPath, prefs, 'utf8');
+        console.log('   ✅ exit_type → Normal (복구 팝업 방지)');
       }
-    } catch (err) {
-      console.warn('⚠️ SingletonLock 삭제 실패:', err.message);
+    } catch (e) {
+      console.warn('   ⚠️ Preferences 수정 실패:', e.message);
     }
 
     // SadCaptcha 확장 프로그램 경로
@@ -734,6 +756,12 @@ class TikTokScraper {
       try { await this.browser.close(); } catch {}
       this.browser = null;
     }
+
+    // 스크래핑 완료 후 Chrome 프로필 복구 (확장 프로그램 세션 유지용)
+    try {
+      exec('"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir="C:\\EV-System\\chrome-tiktok-profile-real" --no-first-run');
+      console.log('🔄 Chrome 프로필 복구 완료');
+    } catch (e) {}
   }
 }
 
