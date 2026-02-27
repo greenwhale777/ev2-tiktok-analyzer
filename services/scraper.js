@@ -1,4 +1,6 @@
 const { chromium } = require('playwright');
+const fs = require('fs');
+const path = require('path');
 
 /**
  * TikTok 검색 결과 스크래퍼
@@ -132,6 +134,18 @@ class TikTokScraper {
    * 브라우저 초기화 (일반 Chrome 사용으로 캡차 우회)
    */
   async initBrowser() {
+    // 크롬 프로필 잠금 해제 (이전 세션이 비정상 종료된 경우)
+    const profilePath = 'C:\\EV-System\\chrome-tiktok-profile-real';
+    const lockFile = path.join(profilePath, 'SingletonLock');
+    try {
+      if (fs.existsSync(lockFile)) {
+        fs.unlinkSync(lockFile);
+        console.log('🔓 SingletonLock 삭제 완료 - 프로필 잠금 해제');
+      }
+    } catch (err) {
+      console.warn('⚠️ SingletonLock 삭제 실패:', err.message);
+    }
+
     // SadCaptcha 확장 프로그램 경로
     const sadcaptchaExtPath = 'C:\\Users\\a\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Extensions\\colmpcmlmokfplanmjmnnahkkpgmmbjl\\3.9_0';
 
