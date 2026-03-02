@@ -138,12 +138,18 @@ class TikTokScraper {
     const profilePath = 'C:\\EV-System\\chrome-tiktok-profile-real';
 
     // 1단계: 스크래핑 프로필 Chrome 프로세스만 종료
+    console.log('🔄 스크래핑 프로필 Chrome 정리...');
     try {
-      console.log('🔄 스크래핑 프로필 Chrome 정리...');
-      execSync('powershell -Command "Get-WmiObject Win32_Process -Filter \\"name=\'chrome.exe\'\\" | Where-Object { $_.CommandLine -match \'chrome-tiktok-profile-real\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"', { stdio: 'ignore', timeout: 10000 });
-      console.log('   ✅ 스크래핑 프로필 Chrome 종료');
+      execSync("wmic process where \"name='chrome.exe' and commandline like '%chrome-tiktok-profile-real%'\" call terminate", { stdio: 'ignore', timeout: 10000 });
+      console.log('   ✅ 스크래핑 프로필 Chrome 종료 (wmic)');
     } catch (e) {
-      console.log('   ℹ️ 스크래핑 프로필 Chrome 미실행');
+      console.log('   ℹ️ wmic 종료 실패 또는 해당 프로세스 없음, taskkill fallback...');
+      try {
+        execSync('taskkill /F /IM chrome.exe', { stdio: 'ignore', timeout: 10000 });
+        console.log('   ✅ 전체 Chrome 종료 (taskkill fallback)');
+      } catch (e2) {
+        console.log('   ℹ️ Chrome 프로세스 없음');
+      }
     }
 
     // 3초 대기 (프로세스 완전 종료)
