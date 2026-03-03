@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add services/scraper.js)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

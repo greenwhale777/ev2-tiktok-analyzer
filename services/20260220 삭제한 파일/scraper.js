@@ -1,7 +1,4 @@
 const { chromium } = require('playwright');
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
 
 /**
  * TikTok 검색 결과 스크래퍼
@@ -135,45 +132,6 @@ class TikTokScraper {
    * 브라우저 초기화 (일반 Chrome 사용으로 캡차 우회)
    */
   async initBrowser() {
-    const profilePath = 'C:\\EV-System\\chrome-tiktok-profile-real';
-
-    // 1단계: 스크래핑 프로필 Chrome 프로세스만 종료
-    console.log('🔄 스크래핑 프로필 Chrome 정리...');
-    try {
-      execSync("wmic process where \"name='chrome.exe' and commandline like '%chrome-tiktok-profile-real%'\" call terminate", { stdio: 'ignore', timeout: 10000 });
-      console.log('   ✅ 스크래핑 프로필 Chrome 종료 (wmic)');
-    } catch (e) {
-      console.log('   ℹ️ wmic 종료 실패 또는 해당 프로세스 없음, taskkill fallback...');
-      try {
-        execSync('taskkill /F /IM chrome.exe', { stdio: 'ignore', timeout: 10000 });
-        console.log('   ✅ 전체 Chrome 종료 (taskkill fallback)');
-      } catch (e2) {
-        console.log('   ℹ️ Chrome 프로세스 없음');
-      }
-    }
-
-    // 3초 대기 (프로세스 완전 종료)
-    await new Promise(r => setTimeout(r, 3000));
-
-    // 2단계: Lock 파일 삭제
-    ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].forEach(f => {
-      try { fs.unlinkSync(path.join(profilePath, f)); } catch (e) {}
-    });
-    console.log('   🔓 Lock 파일 정리 완료');
-
-    // 3단계: exit_type을 Normal로 변경 (복구 팝업 방지)
-    const prefsPath = path.join(profilePath, 'Default', 'Preferences');
-    try {
-      if (fs.existsSync(prefsPath)) {
-        let prefs = fs.readFileSync(prefsPath, 'utf8');
-        prefs = prefs.replace(/"exit_type"\s*:\s*"[^"]*"/, '"exit_type":"Normal"');
-        fs.writeFileSync(prefsPath, prefs, 'utf8');
-        console.log('   ✅ exit_type → Normal (복구 팝업 방지)');
-      }
-    } catch (e) {
-      console.warn('   ⚠️ Preferences 수정 실패:', e.message);
-    }
-
     // SadCaptcha 확장 프로그램 경로
     const sadcaptchaExtPath = 'C:\\Users\\a\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Extensions\\colmpcmlmokfplanmjmnnahkkpgmmbjl\\3.9_0';
 
@@ -363,33 +321,16 @@ class TikTokScraper {
 
       // 30개 이상 수집하려면 스크롤해서 더 많은 콘텐츠 로딩
       if (topN > 10) {
-        for (let attempt = 0; attempt < 2; attempt++) {
-          if (attempt === 1) {
-            console.log('📜 스크롤 재시도: 페이지 새로고침...');
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
-            await this.randomDelay(3000, 5000);
-          }
-          console.log(`📜 Scrolling to load more results... (attempt ${attempt + 1}/2)`);
-          // 페이지 클릭하여 포커스 부여
-          await page.mouse.click(960, 500);
-          await this.randomDelay(800, 1500);
-          // 2~3번째 스크롤 중 랜덤으로 한 번만 위로 살짝 올리기
-          const scrollUpAt = Math.random() < 0.5 ? 1 : 2;
-          let lastCount = 0;
-          for (let i = 0; i < 10; i++) {
-            if (i === scrollUpAt) {
-              await page.evaluate(() => window.scrollBy(0, -300));
-              await this.randomDelay(800, 1500);
-              await page.evaluate(() => window.scrollBy(0, 500));
-              await this.randomDelay(1000, 2000);
-            }
-            await page.evaluate(() => window.scrollBy(0, window.innerHeight * 2));
-            await this.randomDelay(2500, 4500);
-            lastCount = await page.evaluate(() => document.querySelectorAll('a[href*="/video/"]').length);
-            console.log(`   스크롤 ${i + 1}/10 - 현재 ${lastCount}개`);
-            if (lastCount >= topN) break;
-          }
-          if (lastCount >= 15) break;
+        console.log('📜 Scrolling to load more results...');
+        // 페이지 클릭하여 포커스 부여
+        await page.mouse.click(960, 500);
+        await this.randomDelay(500, 1000);
+        for (let i = 0; i < 10; i++) {
+          await page.keyboard.press('End');
+          await this.randomDelay(2000, 3000);
+          const count = await page.evaluate(() => document.querySelectorAll('a[href*="/video/"]').length);
+          console.log(`   스크롤 ${i + 1}/10 - 현재 ${count}개`);
+          if (count >= topN) break;
         }
       }
 

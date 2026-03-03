@@ -19,6 +19,8 @@
 require('dotenv').config();
 const { notifySearchComplete, notifySearchFailed } = require('./services/telegram');
 const { Pool } = require('pg');
+const { execSync } = require('child_process');
+const fs = require('fs');
 const TikTokScraper = require('./services/scraper');
 
 const POLL_INTERVAL = 30000;
@@ -170,22 +172,32 @@ async function checkAndLogin(browser) {
       }
     }
 
-    // 동의 화면 체크
+    // 동의 화면 체크 (최대 10초 대기하며 반복 확인)
     await googlePage.waitForTimeout(2000);
     var consentDone = false;
-    try {
-      var consentBtns = ['button:has-text("계속")', 'button:has-text("Continue")'];
-      for (var c = 0; c < consentBtns.length; c++) {
-        var cb = await googlePage.$(consentBtns[c]);
-        if (cb && await cb.isVisible()) {
-          console.log('   ✅ OAuth 동의 버튼 클릭');
-          await cb.click();
-          consentDone = true;
-          await page.waitForTimeout(5000);
-          break;
+    for (var retry = 0; retry < 5; retry++) {
+      try {
+        var consentBtns = ['button:has-text("계속")', 'button:has-text("Continue")'];
+        for (var c = 0; c < consentBtns.length; c++) {
+          var cb = await googlePage.$(consentBtns[c]);
+          if (cb && await cb.isVisible()) {
+            console.log('   ✅ OAuth 동의 버튼 클릭');
+            await cb.click();
+            consentDone = true;
+            await page.waitForTimeout(5000);
+            break;
+          }
         }
-      }
-    } catch (err) {}
+      } catch (err) {}
+      if (consentDone) break;
+      // 아직 동의 화면이 안 떴을 수 있으니 2초 대기 후 재시도
+      await googlePage.waitForTimeout(2000);
+      // 이미 TikTok으로 돌아왔으면 종료
+      try {
+        var mainUrl = page.url();
+        if (mainUrl.includes('tiktok.com') && !mainUrl.includes('login')) { consentDone = true; break; }
+      } catch (err) {}
+    }
 
     if (!consentDone) {
       // 비밀번호 입력
@@ -202,6 +214,17 @@ async function checkAndLogin(browser) {
       } catch (err) {
         console.log('   ⚠️ 비밀번호 필드 미발견');
       }
+
+      // 비밀번호 입력 후 OAuth 동의 화면 즉시 체크
+      try {
+        await googlePage.waitForTimeout(3000);
+        var earlyConsent = await googlePage.$('button:has-text("계속")') || await googlePage.$('button:has-text("Continue")');
+        if (earlyConsent && await earlyConsent.isVisible()) {
+          console.log('   ✅ OAuth 동의 버튼 클릭 (비밀번호 후)');
+          await earlyConsent.click();
+          await page.waitForTimeout(5000);
+        }
+      } catch (err) {}
 
       // 2단계 인증 대기
       try {
@@ -405,32 +428,6 @@ async function executeSearch(scraper, keyword, topN) {
   }
 }
 
-// Stuck task 자동 정리 (1시간 이상 running/pending 상태)
-var STUCK_TIMEOUT_MINUTES = 60;
-var CLEANUP_INTERVAL = 5 * 60 * 1000; // 5분마다 체크
-var lastCleanupTime = 0;
-
-async function cleanupStuckTasks(force) {
-  var now = Date.now();
-  if (!force && now - lastCleanupTime < CLEANUP_INTERVAL) return;
-  lastCleanupTime = now;
-
-  try {
-    var result = await pool.query(
-      "UPDATE tiktok_tasks SET status = 'failed', error = 'Auto-cleanup: task stuck over " + STUCK_TIMEOUT_MINUTES + " minutes', completed_at = NOW() " +
-      "WHERE status IN ('pending', 'running') AND created_at < NOW() - INTERVAL '" + STUCK_TIMEOUT_MINUTES + " minutes' RETURNING id, keyword, status"
-    );
-    if (result.rows.length > 0) {
-      console.log('🧹 Stuck task 자동 정리: ' + result.rows.length + '개');
-      result.rows.forEach(function(r) {
-        console.log('   - Task #' + r.id + ': ' + (r.keyword || '(없음)'));
-      });
-    }
-  } catch (err) {
-    console.error('Stuck task 정리 오류:', err.message);
-  }
-}
-
 // 대기 중인 작업 처리
 async function processPendingTasks() {
   try {
@@ -447,6 +444,24 @@ async function processPendingTasks() {
     var scraper = new TikTokScraper();
 
     try {
+      // 기존 스크래핑 프로필 Chrome 종료 (프로필 충돌 방지)
+      try {
+        console.log('   🔄 스크래핑 프로필 Chrome 정리...');
+        try {
+          execSync('powershell -Command "Get-WmiObject Win32_Process -Filter \\"name=\'chrome.exe\'\\" | Where-Object { $_.CommandLine -match \'chrome-tiktok-profile-real\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"', { stdio: 'ignore', timeout: 10000 });
+          console.log('   ✅ 스크래핑 프로필 Chrome 종료');
+        } catch(e) {
+          console.log('   ℹ️ 스크래핑 프로필 Chrome 미실행');
+        }
+        await new Promise(r => setTimeout(r, 3000));
+        ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].forEach(function(f) {
+          try { fs.unlinkSync('C:\\EV-System\\chrome-tiktok-profile-real\\' + f); } catch(e) {}
+        });
+        console.log('   🔓 Lock 파일 정리 완료');
+      } catch (e) {
+        console.log('   ℹ️ Chrome 정리 스킵');
+      }
+
       // 브라우저 한 번 열기
       await scraper.initBrowser();
 
@@ -541,7 +556,7 @@ async function processPendingTasks() {
         [err.message, task.id]
       );
       console.log('   ❌ 작업 실패: ' + err.message);
-      await notifySearchFailed(task.keyword || '전체', err.message);
+      await notifySearchFailed(task.keyword || '전체', err.message.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
     } finally {
       // 작업 완료 후 브라우저 종료
       await scraper.close();
@@ -567,10 +582,6 @@ async function main() {
   await initTaskTable();
   console.log('✅ 작업 테이블 준비 완료');
 
-  // 시작 시 stuck task 정리
-  await cleanupStuckTasks(true);
-  console.log('✅ Stuck task 정리 완료');
-
   if (isOnce) {
     var hadTask = await processPendingTasks();
     if (!hadTask) console.log('📭 대기 중인 작업 없음');
@@ -582,7 +593,6 @@ async function main() {
   console.log('👀 대기 중인 작업을 감시합니다...\n');
 
   var poll = async function() {
-    await cleanupStuckTasks(false); // 5분마다 stuck task 체크
     var hadTask = await processPendingTasks();
     if (hadTask) {
       setTimeout(poll, 2000);

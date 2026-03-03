@@ -405,32 +405,6 @@ async function executeSearch(scraper, keyword, topN) {
   }
 }
 
-// Stuck task 자동 정리 (1시간 이상 running/pending 상태)
-var STUCK_TIMEOUT_MINUTES = 60;
-var CLEANUP_INTERVAL = 5 * 60 * 1000; // 5분마다 체크
-var lastCleanupTime = 0;
-
-async function cleanupStuckTasks(force) {
-  var now = Date.now();
-  if (!force && now - lastCleanupTime < CLEANUP_INTERVAL) return;
-  lastCleanupTime = now;
-
-  try {
-    var result = await pool.query(
-      "UPDATE tiktok_tasks SET status = 'failed', error = 'Auto-cleanup: task stuck over " + STUCK_TIMEOUT_MINUTES + " minutes', completed_at = NOW() " +
-      "WHERE status IN ('pending', 'running') AND created_at < NOW() - INTERVAL '" + STUCK_TIMEOUT_MINUTES + " minutes' RETURNING id, keyword, status"
-    );
-    if (result.rows.length > 0) {
-      console.log('🧹 Stuck task 자동 정리: ' + result.rows.length + '개');
-      result.rows.forEach(function(r) {
-        console.log('   - Task #' + r.id + ': ' + (r.keyword || '(없음)'));
-      });
-    }
-  } catch (err) {
-    console.error('Stuck task 정리 오류:', err.message);
-  }
-}
-
 // 대기 중인 작업 처리
 async function processPendingTasks() {
   try {
@@ -567,10 +541,6 @@ async function main() {
   await initTaskTable();
   console.log('✅ 작업 테이블 준비 완료');
 
-  // 시작 시 stuck task 정리
-  await cleanupStuckTasks(true);
-  console.log('✅ Stuck task 정리 완료');
-
   if (isOnce) {
     var hadTask = await processPendingTasks();
     if (!hadTask) console.log('📭 대기 중인 작업 없음');
@@ -582,7 +552,6 @@ async function main() {
   console.log('👀 대기 중인 작업을 감시합니다...\n');
 
   var poll = async function() {
-    await cleanupStuckTasks(false); // 5분마다 stuck task 체크
     var hadTask = await processPendingTasks();
     if (hadTask) {
       setTimeout(poll, 2000);
