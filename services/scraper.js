@@ -389,7 +389,7 @@ class TikTokScraper {
             console.log(`   스크롤 ${i + 1}/10 - 현재 ${lastCount}개`);
             if (lastCount >= topN) break;
           }
-          if (lastCount >= 15) break;
+          if (lastCount >= topN) break;
         }
       }
 
