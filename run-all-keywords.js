@@ -571,10 +571,6 @@ async function run() {
       console.log('🔄 미완료 키워드 재시도 (' + incompleteResults.length + '개)');
       console.log('='.repeat(60));
 
-      // 재시도 전 충분한 대기 (봇 감지 초기화 유도)
-      console.log('\n⏳ 재시도 전 60초 대기 (봇 감지 초기화)...');
-      await new Promise(function(r) { setTimeout(r, 60000); });
-
       // 재시도 전 로그인 상태 재확인
       console.log('\n🔑 재시도 전 로그인 상태 확인...');
       const retryLoginOk = await checkAndLogin(scraper.browser);
@@ -648,7 +644,7 @@ async function run() {
           await pool.query(`UPDATE tiktok_keywords SET updated_at = NOW() WHERE id = $1`, [retryKw.id]);
 
           if (incompleteResults.indexOf(incomplete) < incompleteResults.length - 1) {
-            var retryDelay = Math.floor(Math.random() * 30000) + 45000;
+            var retryDelay = Math.floor(Math.random() * 15000) + 15000;
             console.log('   ⏳ 다음 재시도까지 ' + (retryDelay / 1000).toFixed(1) + '초 대기...');
             await new Promise(function(r) { setTimeout(r, retryDelay); });
           }
