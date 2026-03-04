@@ -1,5 +1,5 @@
 const { chromium } = require('playwright');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -763,6 +763,11 @@ class TikTokScraper {
       this.browser = null;
     }
 
+    // 스크래핑 완료 후 Chrome 프로필 복구 (확장 프로그램 세션 유지용)
+    try {
+      exec('"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir="C:\\EV-System\\chrome-tiktok-profile-real" --no-first-run');
+      console.log('🔄 Chrome 프로필 복구 완료');
+    } catch (e) {}
   }
 }
 
