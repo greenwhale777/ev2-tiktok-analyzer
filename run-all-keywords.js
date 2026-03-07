@@ -13,6 +13,7 @@ require('dotenv').config();
 const { Pool } = require('pg');
 const { execSync } = require('child_process');
 const TikTokScraper = require('./services/scraper');
+const { sendTelegramMessage } = require('./services/telegram');
 
 const topN = parseInt(process.argv[2]) || parseInt(process.env.DEFAULT_TOP_N) || 30;
 
@@ -26,22 +27,6 @@ const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: DATABASE_URL.includes('railway') ? { rejectUnauthorized: false } : false
 });
-
-// 텔레그램 알림 (선택)
-async function sendTelegram(message) {
-  try {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    const chatId = process.env.TELEGRAM_CHAT_ID;
-    if (!token || !chatId) return;
-
-    const url = `https://api.telegram.org/bot${token}/sendMessage`;
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' })
-    });
-  } catch {}
-}
 
 // 브라우저 내에서 로그인 체크 & 자동 로그인
 async function checkAndLogin(browser) {
@@ -201,7 +186,7 @@ async function checkAndLogin(browser) {
       try {
         if (googlePage.url().includes('accounts.google.com')) {
           console.log('   📱 2단계 인증 대기 중... (최대 120초)');
-          await sendTelegram('📱 <b>TikTok 로그인 - 2FA 인증 필요</b>\n\n120초 내에 폰에서 Google 로그인을 승인해주세요!');
+          await sendTelegramMessage('📱 <b>TikTok 로그인 - 2FA 인증 필요</b>\n\n120초 내에 폰에서 Google 로그인을 승인해주세요!');
           const maxWait = 120000;
           let waited = 0;
           while (waited < maxWait) {
@@ -565,7 +550,7 @@ async function run() {
     // 미완료 키워드 재시도
     if (incompleteResults.length > 0) {
       teleMsg += '\n\n🔄 <b>미완료 ' + incompleteResults.length + '개 키워드 재시도 시작</b>';
-      await sendTelegram(teleMsg);
+      await sendTelegramMessage(teleMsg);
 
       console.log('\n' + '='.repeat(60));
       console.log('🔄 미완료 키워드 재시도 (' + incompleteResults.length + '개)');
@@ -695,16 +680,16 @@ async function run() {
       }
 
       finalMsg += '\n⏱️ 총 소요: ' + formatTime(finalTotalSeconds);
-      await sendTelegram(finalMsg);
+      await sendTelegramMessage(finalMsg);
 
     } else {
       // 모두 정상 완료
-      await sendTelegram(teleMsg);
+      await sendTelegramMessage(teleMsg);
     }
 
   } catch (err) {
     console.error('\n❌ 전체 오류: ' + err.message);
-    await sendTelegram('❌ TikTok 자동 스크래핑 오류: ' + err.message);
+    await sendTelegramMessage('❌ TikTok 자동 스크래핑 오류: ' + err.message);
   } finally {
     await scraper.close();
     await pool.end();
