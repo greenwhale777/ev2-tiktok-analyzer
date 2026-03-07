@@ -141,16 +141,33 @@ class TikTokScraper {
     console.log('🔄 스크래핑 프로필 Chrome 정리...');
     try {
       execSync("wmic process where \"name='chrome.exe' and commandline like '%chrome-tiktok-profile-real%'\" call terminate", { stdio: 'ignore', timeout: 10000 });
-      console.log('   ✅ 스크래핑 프로필 Chrome 종료 (wmic)');
+      console.log('   ✅ 스크래핑 프로필 Chrome 종료 요청 (wmic)');
     } catch (e) {
       console.log('   ℹ️ 스크래핑 프로필 Chrome 미실행 또는 wmic 실패 - 계속 진행');
     }
 
-    // 3초 대기 (프로세스 완전 종료)
-    await new Promise(r => setTimeout(r, 3000));
+    // 프로세스 종료 검증 (최대 10초, 1초 간격)
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const result = execSync("wmic process where \"name='chrome.exe' and commandline like '%chrome-tiktok-profile-real%'\" get ProcessId 2>nul", { encoding: 'utf8', timeout: 5000 });
+        if (!result || !result.trim().match(/\d+/)) {
+          console.log(`   ✅ 프로필 Chrome 프로세스 종료 확인 (${i + 1}초)`);
+          break;
+        }
+        console.log(`   ⏳ 프로필 Chrome 프로세스 아직 남아있음... (${i + 1}/10초)`);
+        if (i === 9) {
+          console.log('   ⚠️ 10초 경과 - 잔여 프로세스 있을 수 있음, 계속 진행');
+        }
+      } catch (e) {
+        // wmic 에러 = 프로세스 없음
+        console.log(`   ✅ 프로필 Chrome 프로세스 종료 확인 (${i + 1}초)`);
+        break;
+      }
+    }
 
     // 2단계: Lock 파일 삭제
-    ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].forEach(f => {
+    ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'lockfile'].forEach(f => {
       try { fs.unlinkSync(path.join(profilePath, f)); } catch (e) {}
     });
     console.log('   🔓 Lock 파일 정리 완료');
