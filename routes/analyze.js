@@ -1095,7 +1095,7 @@ const dataQueries = {
 
 router.post('/ai-chat', async (req, res) => {
   try {
-    const { question, chatId } = req.body;
+    const { question, chatId, userName } = req.body;
 
     if (!question) {
       return res.status(400).json({ success: false, error: '질문을 입력해주세요' });
@@ -1224,10 +1224,10 @@ ${contextData}
     let activeChatId = chatId;
     try {
       if (!activeChatId) {
-        // 새 채팅 생성 (제목은 질문 앞 30자)
+        // 새 채팅 생성 (제목은 질문 앞 60자)
         const newChat = await pool.query(
-          `INSERT INTO tiktok_ai_chats (title) VALUES ($1) RETURNING id`,
-          [question.substring(0, 60)]
+          `INSERT INTO tiktok_ai_chats (title, user_name) VALUES ($1, $2) RETURNING id`,
+          [question.substring(0, 60), userName || null]
         );
         activeChatId = newChat.rows[0].id;
       } else {
@@ -1235,8 +1235,8 @@ ${contextData}
       }
       // 질문 저장
       await pool.query(
-        `INSERT INTO tiktok_ai_messages (chat_id, role, content) VALUES ($1, 'user', $2)`,
-        [activeChatId, question]
+        `INSERT INTO tiktok_ai_messages (chat_id, role, content, user_name) VALUES ($1, 'user', $2, $3)`,
+        [activeChatId, question, userName || null]
       );
       // 답변 저장
       await pool.query(
@@ -1285,7 +1285,7 @@ router.get('/ai-chats/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: '채팅을 찾을 수 없습니다' });
     }
     const messages = await pool.query(
-      `SELECT role, content, created_at FROM tiktok_ai_messages WHERE chat_id = $1 ORDER BY created_at ASC`,
+      `SELECT role, content, user_name, created_at FROM tiktok_ai_messages WHERE chat_id = $1 ORDER BY created_at ASC`,
       [id]
     );
     res.json({ success: true, data: { chat: chat.rows[0], messages: messages.rows } });
