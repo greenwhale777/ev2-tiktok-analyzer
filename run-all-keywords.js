@@ -647,44 +647,66 @@ async function run() {
       }
 
       // 최종 텔레그램 리포트
+      const retryTotalSeconds = (Date.now() - startTime.getTime()) / 1000 - totalSeconds;
       const finalTotalSeconds = (Date.now() - startTime.getTime()) / 1000;
+      const totalKeywords = results.length;
+
+      // 재시도 성공/실패 분류
+      const retrySucceeded = retryResults.filter(function(r) { return r.status === 'success' && r.retryCount >= topN; });
+      const retryStillFailed = retryResults.filter(function(r) { return r.status === 'failed' || (r.status === 'success' && r.retryCount < topN); });
+
+      // 1차 정상 완료 키워드
+      const fullResults = results.filter(function(r) { return r.status === 'success' && r.count >= topN; });
+
+      // 최종 성공 수 = 1차 정상 + 재시도 성공
+      const finalSuccessCount = fullResults.length + retrySucceeded.length;
+      const finalPercent = Math.round(finalSuccessCount / totalKeywords * 100);
+
       let finalMsg = '📋 <b>TikTok 최종 스크래핑 리포트</b>\n';
       finalMsg += '📅 ' + startTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + '\n\n';
 
+      // 1차/2차 요약
+      finalMsg += '✅ 1차: ' + successCount + '/' + totalKeywords + ' 성공 (⏱️ ' + totalTimeStr + ')\n';
+      finalMsg += '✅ 2차: ' + finalSuccessCount + '/' + totalKeywords + ' 성공 (⏱️ ' + formatTime(retryTotalSeconds) + ')\n';
+      finalMsg += '🎯 최종: ' + finalSuccessCount + '/' + totalKeywords + ' (' + finalPercent + '%)\n';
+
       // 정상 완료 키워드
-      const fullResults = results.filter(function(r) { return r.status === 'success' && r.count >= topN; });
       if (fullResults.length > 0) {
-        finalMsg += '✅ <b>정상 완료 (' + fullResults.length + '개)</b>\n';
+        finalMsg += '\n✅ <b>정상 완료 (' + fullResults.length + '개)</b>\n';
         fullResults.forEach(function(r) { finalMsg += '  · ' + r.keyword + ': ' + r.count + '개\n'; });
-        finalMsg += '\n';
       }
 
-      // 재시도 결과
-      finalMsg += '🔄 <b>재시도 결과 (' + retryResults.length + '개)</b>\n';
-      retryResults.forEach(function(r) {
-        if (r.status === 'success') {
-          const icon = r.retryCount >= topN ? '✅' : '⚠️';
-          finalMsg += icon + ' ' + r.keyword + ': ' + r.firstCount + '→' + r.retryCount + '/' + topN + '개';
-          if (r.improved) finalMsg += ' 📈';
-          finalMsg += '\n';
-        } else {
-          finalMsg += '❌ ' + r.keyword + ': 재시도 실패\n';
-        }
-      });
+      // 재시도 성공 키워드
+      if (retrySucceeded.length > 0) {
+        finalMsg += '\n🔄 <b>재시도 성공 (' + retrySucceeded.length + '개)</b>\n';
+        retrySucceeded.forEach(function(r) { finalMsg += '  · ' + r.keyword + ': ' + r.firstCount + '→' + r.retryCount + '개\n'; });
+      }
 
-      // 실패 키워드
-      const failedResults = results.filter(function(r) { return r.status === 'failed'; });
-      if (failedResults.length > 0) {
-        finalMsg += '\n❌ <b>실패 (' + failedResults.length + '개)</b>\n';
-        failedResults.forEach(function(r) { finalMsg += '  · ' + r.keyword + ': ' + r.error + '\n'; });
+      // 최종 실패 키워드
+      if (retryStillFailed.length > 0) {
+        finalMsg += '\n❌ <b>최종 실패 (' + retryStillFailed.length + '개)</b>\n';
+        retryStillFailed.forEach(function(r) {
+          if (r.error) {
+            finalMsg += '  · ' + r.keyword + ': ' + r.error + '\n';
+          } else {
+            finalMsg += '  · ' + r.keyword + ': ' + r.firstCount + '→' + r.retryCount + '개 (목표 미달)\n';
+          }
+        });
       }
 
       finalMsg += '\n⏱️ 총 소요: ' + formatTime(finalTotalSeconds);
       await sendTelegramMessage(finalMsg);
 
     } else {
-      // 모두 정상 완료
-      await sendTelegramMessage(teleMsg);
+      // 모두 정상 완료 (재시도 없음)
+      const allSuccessPercent = Math.round(successCount / results.length * 100);
+      let allDoneMsg = '📋 <b>TikTok 최종 스크래핑 리포트</b>\n';
+      allDoneMsg += '📅 ' + startTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + '\n\n';
+      allDoneMsg += '✅ ' + successCount + '/' + results.length + ' 성공 (' + allSuccessPercent + '%)\n';
+      allDoneMsg += '\n✅ <b>정상 완료 (' + successCount + '개)</b>\n';
+      results.forEach(function(r) { allDoneMsg += '  · ' + r.keyword + ': ' + r.count + '개\n'; });
+      allDoneMsg += '\n⏱️ 총 소요: ' + totalTimeStr;
+      await sendTelegramMessage(allDoneMsg);
     }
 
   } catch (err) {
